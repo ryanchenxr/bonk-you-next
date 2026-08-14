@@ -1,0 +1,13 @@
+# 私有 Supabase 配置
+js/supabase-config.js
+
+# macOS
+.DS_Store
+
+# 开发/测试截图
+screenshot-*.png
+
+# 原始素材目录（虽然我已经移出项目，也保留规则防止以后误放回来）
+Game elements/
+music/
+reference/

@@ -1,0 +1,1184 @@
+/* ============================================================
+ * 「下回打你」核心游戏逻辑
+ * 清晰区分：状态 / 布局 / 出洞调度 / 点击判定 / 计分 / Combo
+ *           / 音频 / Supabase 排行榜 / 被打榜 / UI 更新
+ *           / 开始 / 暂停 / 结束 / 重置
+ * ============================================================ */
+(function (global) {
+  "use strict";
+
+  /* ============ 常量 ============ */
+  var GAME_DURATION_MS = 30000; // 30 秒
+  var BASE_SCORE = 10;
+  var COMBO_SCORE = 20;
+  var COMBO_MIN = 2; // 连续第 2 次开始 ×2
+
+  // 全局同时出现的硬上限：任何时刻最多 5 只。
+  var MAX_ACTIVE_MOLES = 5;
+
+  // 分阶段节奏（单位 ms），由易到难。
+  var PHASES = [
+    { until: 5000,  min: 1, max: 1, stay: [900, 1200], interval: [700, 1000], noOverlap: true  },
+    { until: 15000, min: 1, max: 4, stay: [750, 1000], interval: [600, 850],  noOverlap: false },
+    { until: 25000, min: 1, max: 4, stay: [650, 900],  interval: [500, 750],  noOverlap: false },
+    { until: 30000, min: 2, max: 4, stay: [550, 800],  interval: [450, 650],  noOverlap: false }
+  ];
+
+  var STATE = { IDLE: "idle", COUNTDOWN: "countdown", PLAYING: "playing", PAUSED: "paused", GAMEOVER: "gameover" };
+  var HIGH_KEY = "xiabudani_highscore_v1";
+  var PLAYER_NAME_KEY = "smileGame.playerName";
+  var PLAYER_ID_KEY = "smileGame.playerId";
+
+  /* ============ DOM 引用 ============ */
+  var board = document.getElementById("board");
+  var boardWrap = document.querySelector(".board-wrap");
+  var scoreEl = document.getElementById("score");
+  var timeEl = document.getElementById("time");
+  var highEl = document.getElementById("highscore");
+  var hitsEl = document.getElementById("hits");
+  var comboIndicator = document.getElementById("combo-indicator");
+  var countdownOverlay = document.getElementById("countdown-overlay");
+  var countdownNumber = document.getElementById("countdown-number");
+
+  var startBtn = document.getElementById("btn-start");
+  var pauseBtn = document.getElementById("btn-pause");
+  var soundBtn = document.getElementById("btn-sound");
+  var soundIcon = document.getElementById("sound-icon");
+  var soundLabel = document.getElementById("sound-label");
+  var btnViewBoard = document.getElementById("btn-view-board");
+  var playerNameInput = document.getElementById("player-name");
+
+  var pauseOverlay = document.getElementById("pause-overlay");
+  var btnResume = document.getElementById("btn-resume");
+
+  var resultModal = document.getElementById("result-modal");
+  var resultRecord = document.getElementById("result-record");
+  var resultTop10 = document.getElementById("result-top10");
+  var resultUpload = document.getElementById("result-upload");
+  var resultScore = document.getElementById("result-score");
+  var resultHits = document.getElementById("result-hits");
+  var resultHigh = document.getElementById("result-high");
+  var btnReplay = document.getElementById("btn-replay");
+  var btnResultBoard = document.getElementById("btn-result-board");
+  var btnCloseResult = document.getElementById("btn-close-result");
+
+  var boardModal = document.getElementById("board-modal");
+  var fullBoard = document.getElementById("full-board");
+  var miniBoard = document.getElementById("mini-board");
+  var btnCloseBoard = document.getElementById("btn-close-board");
+  var btnCloseBoard2 = document.getElementById("btn-close-board2");
+
+  var hitBoardList = document.getElementById("hit-board-list");
+  var hitBoardTabButtons = document.querySelectorAll("#hit-board-tabs .segment");
+  var btnViewHits = document.getElementById("btn-view-hits");
+  var hitModal = document.getElementById("hit-modal");
+  var hitModalTabButtons = document.querySelectorAll("#hit-modal-tabs .segment");
+  var fullHitBoard = document.getElementById("full-hit-board");
+  var btnCloseHit = document.getElementById("btn-close-hit");
+  var btnCloseHit2 = document.getElementById("btn-close-hit2");
+
+  var hammerCursor = document.getElementById("hammer-cursor");
+
+  /* ============ 游戏状态 ============ */
+  var state = STATE.IDLE;
+  var slots = [];      // 9 个洞口对象
+  var layout = [];     // 本局 9 个角色（按洞口顺序，名字与图片绑定）
+  var score = 0;
+  var hits = 0;
+  var combo = 0;
+  var highscore = 0;
+  var timeLeftMs = GAME_DURATION_MS;
+  var tickTimer = null;
+  var roundTimer = null;
+  var countdownTimer = null;
+  var lastTick = 0;
+  var lastUsed = [];   // 上一轮使用的洞口（用于降低连续重复概率）
+  var newRecord = false;
+
+  // Supabase / 身份
+  var playerId = "";
+  var roundId = "";
+  var roundCharacterHits = {};   // { character_id: 本轮被打次数 }
+  var scoreSubmitted = false;    // 本局是否已发起提交（防前端重复提交）
+  var submitAttempted = false;
+
+  // 被打榜 tab 状态
+  var hitBoardTab = "round";   // "round" | "all"
+  var hitModalTab = "round";
+
+  // 远端数据缓存
+  var publicLeaderboardCache = null;   // TOP3
+  var publicLeaderboardFailed = false;
+  var publicLeaderboardCache10 = null; // TOP10
+  var characterHitCache = null;
+  var characterHitFailed = false;
+
+  /* ============ 工具函数 ============ */
+  function rand(min, max) { return min + Math.random() * (max - min); }
+  function randInt(min, max) { return Math.floor(rand(min, max + 1)); }
+
+  function shuffle(arr) {
+    var a = arr.slice();
+    for (var i = a.length - 1; i > 0; i--) {
+      var j = Math.floor(Math.random() * (i + 1));
+      var t = a[i]; a[i] = a[j]; a[j] = t;
+    }
+    return a;
+  }
+
+  function fmtTime(ms) {
+    var s = Math.max(0, Math.ceil(ms / 1000));
+    var m = Math.floor(s / 60);
+    var ss = s % 60;
+    return (m < 10 ? "0" + m : m) + ":" + (ss < 10 ? "0" + ss : ss);
+  }
+
+  function getPhase(elapsedMs) {
+    for (var i = 0; i < PHASES.length; i++) {
+      if (elapsedMs < PHASES[i].until) return PHASES[i];
+    }
+    return PHASES[PHASES.length - 1];
+  }
+
+  function newUuid() {
+    try {
+      if (global.crypto && typeof global.crypto.randomUUID === "function") {
+        return global.crypto.randomUUID();
+      }
+    } catch (e) { /* fall through */ }
+    return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, function (c) {
+      var r = (Math.random() * 16) | 0;
+      var v = c === "x" ? r : (r & 0x3) | 0x8;
+      return v.toString(16);
+    });
+  }
+
+  function pad2(n) { return n < 10 ? "0" + n : "" + n; }
+
+  function fmtDateTime(iso) {
+    if (!iso) return "";
+    var d = new Date(iso);
+    if (isNaN(d.getTime())) return "";
+    return d.getFullYear() + "-" + pad2(d.getMonth() + 1) + "-" + pad2(d.getDate()) +
+      " " + pad2(d.getHours()) + ":" + pad2(d.getMinutes()) + ":" + pad2(d.getSeconds());
+  }
+
+  function fmtCount(n) {
+    n = Number(n) || 0;
+    try { return n.toLocaleString(); } catch (e) { return "" + n; }
+  }
+
+  function charById(id) {
+    for (var i = 0; i < global.CHARACTERS.length; i++) {
+      if (global.CHARACTERS[i].id === id) return global.CHARACTERS[i];
+    }
+    return null;
+  }
+
+  function charIndex(id) {
+    for (var i = 0; i < global.CHARACTERS.length; i++) {
+      if (global.CHARACTERS[i].id === id) return i;
+    }
+    return 999;
+  }
+
+  /* ============ 构建九宫格 ============ */
+  function buildBoard() {
+    board.innerHTML = "";
+    slots = [];
+    for (var i = 0; i < 9; i++) {
+      var slot = document.createElement("div");
+      slot.className = "slot";
+      slot.dataset.index = i;
+      slot.innerHTML =
+        '<div class="hole"></div>' +
+        '<div class="mole-viewport">' +
+          '<div class="mole"><img alt=""></div>' +
+        '</div>' +
+        '<div class="hole-front-rim"></div>' +
+        '<div class="nameplate"><span class="name"></span></div>';
+      board.appendChild(slot);
+      slots.push({
+        el: slot,
+        mole: slot.querySelector(".mole"),
+        moleImg: slot.querySelector(".mole img"),
+        nameEl: slot.querySelector(".name"),
+        characterId: "",
+        active: false,
+        hit: false,
+        hideTimer: null,
+        stayEnd: 0,
+        remaining: 0
+      });
+    }
+  }
+
+  /* ============ 随机布局（人物与洞口绑定，每局洗牌一次） ============ */
+  function assignLayout() {
+    layout = shuffle(global.CHARACTERS);
+    for (var i = 0; i < 9; i++) {
+      var s = slots[i];
+      var ch = layout[i];
+      s.nameEl.textContent = ch.name;
+      s.moleImg.src = ch.image;
+      s.moleImg.alt = ch.name;
+      s.characterId = ch.id;
+      // 应用角色出洞高度微调（默认 0）
+      s.mole.style.setProperty("--dy", (ch.displayOffsetY || 0) + "%");
+    }
+  }
+
+  function clearLayout() {
+    for (var i = 0; i < 9; i++) {
+      var s = slots[i];
+      s.nameEl.textContent = "";
+      s.moleImg.removeAttribute("src");
+      s.moleImg.alt = "";
+      s.characterId = "";
+    }
+  }
+
+  /* ============ 出洞调度 ============ */
+  function pickSlots(count) {
+    var available = [];
+    for (var i = 0; i < 9; i++) if (!slots[i].active) available.push(i);
+    var n = Math.min(count, available.length);
+    if (n <= 0) return [];
+    available = shuffle(available);
+    // 降低上一轮刚出现过的洞口被再次选中的概率（但不禁用）
+    available.sort(function (a, b) {
+      var ra = lastUsed.indexOf(a) >= 0 ? 1 : 0;
+      var rb = lastUsed.indexOf(b) >= 0 ? 1 : 0;
+      if (ra !== rb) return ra - rb;
+      return Math.random() - 0.5;
+    });
+    var picked = available.slice(0, n);
+    lastUsed = picked.slice();
+    return picked;
+  }
+
+  function activeCount() {
+    var n = 0;
+    for (var i = 0; i < 9; i++) if (slots[i].active) n++;
+    return n;
+  }
+
+  function scheduleNextRound() {
+    if (state !== STATE.PLAYING) return;
+    var elapsed = GAME_DURATION_MS - timeLeftMs;
+    var phase = getPhase(elapsed);
+    // 全局硬上限：已有 active 的只数不能超过 MAX_ACTIVE_MOLES，剩余名额才允许新增。
+    var budget = Math.max(0, MAX_ACTIVE_MOLES - activeCount());
+    var count = Math.min(randInt(phase.min, phase.max), budget);
+    var picked = pickSlots(count);
+    var warmupStay = 0;
+    for (var i = 0; i < picked.length; i++) {
+      var stay = Math.round(rand(phase.stay[0], phase.stay[1]));
+      if (phase.noOverlap) warmupStay = stay;
+      showMole(picked[i], stay);
+    }
+    var delay;
+    if (phase.noOverlap) {
+      delay = warmupStay + randInt(200, 400);
+    } else {
+      delay = Math.round(rand(phase.interval[0], phase.interval[1]));
+    }
+    roundTimer = setTimeout(scheduleNextRound, delay);
+  }
+
+  function showMole(index, stayMs) {
+    var s = slots[index];
+    if (s.active) return;
+    s.active = true;
+    s.hit = false;
+    s.stayEnd = Date.now() + stayMs;
+    s.remaining = stayMs;
+    s.mole.classList.remove("hit");
+    s.mole.classList.add("up");
+    s.hideTimer = setTimeout(function () { hideMole(index, false); }, stayMs);
+  }
+
+  function hideMole(index, wasHit) {
+    var s = slots[index];
+    if (s.hideTimer) { clearTimeout(s.hideTimer); s.hideTimer = null; }
+    var wasActive = s.active;
+    s.active = false;
+    if (wasHit) s.mole.classList.add("hit");
+    s.mole.classList.remove("up");
+    if (wasHit) {
+      setTimeout(function () { s.mole.classList.remove("hit"); }, 300);
+    }
+    // 土拨鼠自己缩回且未被击中 -> 中断连击
+    if (!wasHit && wasActive && state === STATE.PLAYING) {
+      breakCombo();
+    }
+  }
+
+  function hideAllMoles() {
+    for (var i = 0; i < 9; i++) {
+      var s = slots[i];
+      if (s.hideTimer) { clearTimeout(s.hideTimer); s.hideTimer = null; }
+      s.active = false;
+      s.hit = false;
+      s.mole.classList.remove("up");
+      s.mole.classList.remove("hit");
+    }
+  }
+
+  function clearRoundTimer() {
+    if (roundTimer) { clearTimeout(roundTimer); roundTimer = null; }
+  }
+
+  function clearAllTimers() {
+    if (tickTimer) { clearInterval(tickTimer); tickTimer = null; }
+    clearRoundTimer();
+    if (countdownTimer) { clearInterval(countdownTimer); clearTimeout(countdownTimer); countdownTimer = null; }
+    for (var i = 0; i < 9; i++) {
+      if (slots[i].hideTimer) { clearTimeout(slots[i].hideTimer); slots[i].hideTimer = null; }
+    }
+  }
+
+  /* ============ 点击判定 ============ */
+  function onBoardPointerDown(e) {
+    if (state !== STATE.PLAYING) return;
+    var slotEl = e.target && e.target.closest ? e.target.closest(".slot") : null;
+    if (slotEl) {
+      onSlotClick(parseInt(slotEl.dataset.index, 10));
+    } else {
+      breakCombo();
+      showMissFeedback(null);
+    }
+  }
+
+  function onSlotClick(index) {
+    var s = slots[index];
+    if (s.active && !s.hit) {
+      s.hit = true;
+      hits++;
+      combo++;
+      var points = combo >= COMBO_MIN ? COMBO_SCORE : BASE_SCORE;
+      score += points;
+
+      // 同一有效 hit 分支里，同时累计该角色本轮被打次数
+      var chId = s.characterId;
+      if (chId) {
+        roundCharacterHits[chId] = (roundCharacterHits[chId] || 0) + 1;
+      }
+
+      global.AudioManager.playHit();
+      showHitFeedback(index, points);
+      hideMole(index, true);
+      updateComboUI(true);
+      updateScoreUI();
+      checkHighscore();
+      pulseBoard();
+      renderHitBoard();
+    } else {
+      breakCombo();
+      showMissFeedback(index);
+    }
+  }
+
+  /* ============ 计分 / Combo ============ */
+  function breakCombo() {
+    if (combo === 0) return;
+    combo = 0;
+    updateComboUI(false);
+  }
+
+  function checkHighscore() {
+    if (score > highscore) {
+      highscore = score;
+      saveHighscore();
+      newRecord = true;
+      updateScoreUI();
+    }
+  }
+
+  /* ============ 反馈特效 ============ */
+  function showHitFeedback(index, points) {
+    var s = slots[index];
+    var el = document.createElement("div");
+    el.className = "float-text" + (points >= COMBO_SCORE ? " combo" : "");
+    el.textContent = "+" + points;
+    s.el.appendChild(el);
+    setTimeout(function () { el.remove(); }, 600);
+
+    var spark = document.createElement("div");
+    spark.className = "spark";
+    s.el.appendChild(spark);
+    setTimeout(function () { spark.remove(); }, 500);
+  }
+
+  function showMissFeedback(index) {
+    if (index == null) return;
+    var s = slots[index];
+    var el = document.createElement("div");
+    el.className = "float-text miss";
+    el.textContent = "MISS";
+    s.el.appendChild(el);
+    setTimeout(function () { el.remove(); }, 450);
+  }
+
+  function pulseBoard() {
+    boardWrap.classList.remove("shake");
+    void boardWrap.offsetWidth;
+    boardWrap.classList.add("shake");
+    setTimeout(function () { boardWrap.classList.remove("shake"); }, 200);
+  }
+
+  /* ============ UI 更新 ============ */
+  function updateScoreUI() {
+    scoreEl.textContent = score;
+    hitsEl.textContent = hits;
+    highEl.textContent = highscore;
+  }
+
+  function updateTimeUI() {
+    timeEl.textContent = fmtTime(timeLeftMs);
+  }
+
+  function updateStatsUI() {
+    updateScoreUI();
+    updateTimeUI();
+  }
+
+  function updateComboUI(justScored) {
+    if (combo >= COMBO_MIN) {
+      comboIndicator.classList.add("show");
+      if (justScored) {
+        comboIndicator.classList.remove("pulse");
+        void comboIndicator.offsetWidth;
+        comboIndicator.classList.add("pulse");
+      }
+    } else {
+      comboIndicator.classList.remove("show");
+      comboIndicator.classList.remove("pulse");
+    }
+  }
+
+  /* ============ 最高分（localStorage，本机个人最高分） ============ */
+  function loadHighscore() {
+    try {
+      var v = parseInt(localStorage.getItem(HIGH_KEY), 10);
+      return isNaN(v) ? 0 : v;
+    } catch (e) { return 0; }
+  }
+
+  function saveHighscore() {
+    try { localStorage.setItem(HIGH_KEY, String(highscore)); } catch (e) { /* ignore */ }
+  }
+
+  /* ============ 玩家姓名 / 匿名 player_id ============ */
+  function normalizePlayerName(raw) {
+    var n = (raw == null ? "" : String(raw)).trim();
+    if (!n) n = "玩家";
+    if (n.length > 12) n = n.slice(0, 12);
+    return n;
+  }
+
+  function loadPlayerName() {
+    try {
+      return localStorage.getItem(PLAYER_NAME_KEY) || "";
+    } catch (e) { return ""; }
+  }
+
+  function savePlayerName(name) {
+    try { localStorage.setItem(PLAYER_NAME_KEY, name); } catch (e) { /* ignore */ }
+  }
+
+  function currentPlayerName() {
+    return normalizePlayerName(playerNameInput.value);
+  }
+
+  function getOrCreatePlayerId() {
+    var id = "";
+    try { id = localStorage.getItem(PLAYER_ID_KEY) || ""; } catch (e) { id = ""; }
+    if (!id) {
+      id = newUuid();
+      try { localStorage.setItem(PLAYER_ID_KEY, id); } catch (e) { /* ignore */ }
+    }
+    return id;
+  }
+
+  /* 开始游戏前统一规范化姓名，并让输入框显示有效值（空 -> 玩家）。 */
+  function applyNormalizedName() {
+    var n = normalizePlayerName(playerNameInput.value);
+    playerNameInput.value = n;
+    savePlayerName(n);
+    return n;
+  }
+
+  /* ============ 本轮被打统计 ============ */
+  function emptyRoundHits() {
+    var obj = {};
+    for (var i = 0; i < global.CHARACTERS.length; i++) {
+      obj[global.CHARACTERS[i].id] = 0;
+    }
+    return obj;
+  }
+
+  function getRoundHitEntries() {
+    var entries = [];
+    for (var i = 0; i < global.CHARACTERS.length; i++) {
+      var ch = global.CHARACTERS[i];
+      entries.push({ id: ch.id, name: ch.name, hits: roundCharacterHits[ch.id] || 0 });
+    }
+    entries.sort(function (a, b) {
+      if (b.hits !== a.hits) return b.hits - a.hits;
+      return charIndex(a.id) - charIndex(b.id);
+    });
+    return entries;
+  }
+
+  function hitsInvariantSum() {
+    var sum = 0;
+    for (var id in roundCharacterHits) {
+      if (Object.prototype.hasOwnProperty.call(roundCharacterHits, id)) {
+        sum += roundCharacterHits[id] || 0;
+      }
+    }
+    return sum;
+  }
+
+  function verifyHitsInvariant() {
+    return hitsInvariantSum() === hits;
+  }
+
+  /* ============ 被打榜渲染 ============ */
+  function normalizeAllEntries(cache) {
+    var out = [];
+    for (var i = 0; i < (cache || []).length; i++) {
+      var row = cache[i];
+      var ch = charById(row.character_id);
+      out.push({
+        id: row.character_id,
+        name: row.character_name || (ch ? ch.name : row.character_id),
+        hits: row.total_hits || 0
+      });
+    }
+    return out;
+  }
+
+  function appendHitEmpty(listEl, text) {
+    var li = document.createElement("li");
+    li.className = "hit-empty";
+    li.textContent = text;
+    listEl.appendChild(li);
+  }
+
+  function renderHitEntriesTo(listEl, entries, limit) {
+    var n = Math.min(limit == null ? entries.length : limit, entries.length);
+    for (var i = 0; i < n; i++) {
+      var e = entries[i];
+      var li = document.createElement("li");
+      li.dataset.rank = String(i + 1);
+      var nameEl = document.createElement("span");
+      nameEl.className = "hit-name";
+      nameEl.textContent = e.name;
+      var countEl = document.createElement("span");
+      countEl.className = "hit-count";
+      countEl.textContent = fmtCount(e.hits) + " 次";
+      li.appendChild(nameEl);
+      li.appendChild(countEl);
+      listEl.appendChild(li);
+    }
+  }
+
+  function renderHitBoard() {
+    hitBoardList.innerHTML = "";
+    if (hitBoardTab === "round") {
+      var entries = getRoundHitEntries();
+      var anyHit = entries.some(function (e) { return e.hits > 0; });
+      if (!anyHit) {
+        appendHitEmpty(hitBoardList, "本轮还没人挨打");
+      } else {
+        renderHitEntriesTo(hitBoardList, entries, 3);
+      }
+    } else {
+      if (characterHitFailed) {
+        appendHitEmpty(hitBoardList, "累计数据暂时无法连接");
+      } else if (!characterHitCache) {
+        appendHitEmpty(hitBoardList, "加载中…");
+      } else {
+        renderHitEntriesTo(hitBoardList, normalizeAllEntries(characterHitCache), 3);
+      }
+    }
+  }
+
+  function renderHitModalBoard() {
+    fullHitBoard.innerHTML = "";
+    if (hitModalTab === "round") {
+      renderHitEntriesTo(fullHitBoard, getRoundHitEntries(), 9);
+    } else {
+      if (characterHitFailed) {
+        appendHitEmpty(fullHitBoard, "累计数据暂时无法连接");
+      } else if (!characterHitCache) {
+        appendHitEmpty(fullHitBoard, "加载中…");
+      } else {
+        renderHitEntriesTo(fullHitBoard, normalizeAllEntries(characterHitCache), 9);
+      }
+    }
+  }
+
+  function updateHitTabs() {
+    hitBoardTabButtons.forEach(function (btn) {
+      btn.classList.toggle("active", btn.dataset.tab === hitBoardTab);
+    });
+    hitModalTabButtons.forEach(function (btn) {
+      btn.classList.toggle("active", btn.dataset.tab === hitModalTab);
+    });
+  }
+
+  /* ============ 计时 ============ */
+  function tick() {
+    var now = Date.now();
+    var delta = now - lastTick;
+    lastTick = now;
+    timeLeftMs -= delta;
+    if (timeLeftMs <= 0) {
+      timeLeftMs = 0;
+      updateTimeUI();
+      endGame();
+      return;
+    }
+    updateTimeUI();
+  }
+
+  /* ============ 开始 / 重置（统一进入 3 秒准备倒计时） ============ */
+  function startGame() {
+    clearAllTimers();
+    hideAllMoles();
+    hideResultModal();
+    hidePauseOverlay();
+    hideHammer();
+    board.classList.remove("cursor-hammer");
+    global.AudioManager.stopBgm();
+
+    applyNormalizedName(); // trim + 空名 -> 玩家
+
+    score = 0;
+    hits = 0;
+    combo = 0;
+    newRecord = false;
+    timeLeftMs = GAME_DURATION_MS;
+    lastUsed = [];
+
+    // 每一局：新的 round_id、本轮被打统计归零、重置提交标记
+    roundId = newUuid();
+    roundCharacterHits = emptyRoundHits();
+    scoreSubmitted = false;
+    submitAttempted = false;
+
+    // 被打榜切回「本轮」
+    hitBoardTab = "round";
+    hitModalTab = "round";
+    updateHitTabs();
+    renderHitBoard();
+
+    assignLayout(); // 重新随机人物与洞口的绑定
+    updateStatsUI();
+    updateComboUI(false);
+
+    startCountdown();
+  }
+
+  function startCountdown() {
+    state = STATE.COUNTDOWN;
+    updateButtons();
+    var steps = ["3", "2", "1"];
+    var i = 0;
+    showCountdown(steps[0]);
+    countdownTimer = setInterval(function () {
+      i++;
+      if (i < steps.length) {
+        showCountdown(steps[i]);
+      } else {
+        clearInterval(countdownTimer);
+        countdownTimer = null;
+        showCountdown("开始！");
+        countdownTimer = setTimeout(function () {
+          countdownTimer = null;
+          hideCountdown();
+          beginPlay();
+        }, 600);
+      }
+    }, 1000);
+  }
+
+  function beginPlay() {
+    state = STATE.PLAYING;
+    global.AudioManager.playBgm();
+    lastTick = Date.now();
+    tickTimer = setInterval(tick, 100);
+    updateButtons();
+    scheduleNextRound();
+  }
+
+  function showCountdown(text) {
+    countdownNumber.textContent = text;
+    countdownOverlay.hidden = false;
+    countdownNumber.classList.remove("pop");
+    void countdownNumber.offsetWidth;
+    countdownNumber.classList.add("pop");
+  }
+
+  function hideCountdown() {
+    countdownOverlay.hidden = true;
+  }
+
+  /* ============ 暂停 / 恢复 ============ */
+  function pauseGame() {
+    if (state !== STATE.PLAYING) return;
+    state = STATE.PAUSED;
+    if (tickTimer) { clearInterval(tickTimer); tickTimer = null; }
+    clearRoundTimer();
+    var now = Date.now();
+    for (var i = 0; i < 9; i++) {
+      var s = slots[i];
+      if (s.active) {
+        if (s.hideTimer) { clearTimeout(s.hideTimer); s.hideTimer = null; }
+        s.remaining = Math.max(0, s.stayEnd - now);
+      }
+    }
+    global.AudioManager.pauseBgm();
+    hideHammer();
+    showPauseOverlay();
+    updateButtons();
+  }
+
+  function resumeGame() {
+    if (state !== STATE.PAUSED) return;
+    state = STATE.PLAYING;
+    global.AudioManager.resumeBgm();
+    lastTick = Date.now();
+    tickTimer = setInterval(tick, 100);
+    for (var i = 0; i < 9; i++) {
+      var s = slots[i];
+      if (s.active) {
+        s.stayEnd = Date.now() + s.remaining;
+        s.hideTimer = setTimeout(function (idx) {
+          return function () { hideMole(idx, false); };
+        }(i), s.remaining);
+      }
+    }
+    hidePauseOverlay();
+    updateButtons();
+    scheduleNextRound();
+  }
+
+  /* ============ 结束 ============ */
+  function endGame() {
+    state = STATE.GAMEOVER;
+    clearAllTimers();
+    hideAllMoles();
+    hideHammer();
+    board.classList.remove("cursor-hammer");
+    global.AudioManager.stopBgm();
+
+    applyNormalizedName();
+    updateButtons();
+    showResultModal();
+    // 本轮被打榜保留到下一局 countdown 才清零（玩家结束后还能看到这局谁挨打最多）
+    renderHitBoard();
+
+    // 异步提交（不阻塞结算弹窗）
+    submitRoundScore(1);
+  }
+
+  /* ============ 提交成绩 ============ */
+  function submitRoundScore(attempt) {
+    if (scoreSubmitted) return;
+    if (submitAttempted && attempt === 1) return; // 已经发起过（重试由内部处理）
+    submitAttempted = true;
+
+    if (!verifyHitsInvariant()) {
+      global.console && global.console.error("成绩统计异常，未上传");
+      resultUpload.textContent = "成绩统计异常，未上传";
+      resultUpload.hidden = false;
+      return;
+    }
+
+    if (!global.Supabase.isConfigured()) {
+      resultUpload.textContent = "成绩暂未上传";
+      resultUpload.hidden = false;
+      return;
+    }
+
+    var payload = {
+      p_player_id: playerId,
+      p_player_name: currentPlayerName(),
+      p_score: score,
+      p_hits: hits,
+      p_round_id: roundId,
+      p_character_hits: roundCharacterHits
+    };
+
+    global.Supabase.submitGameScore(payload).then(function () {
+      scoreSubmitted = true;
+      resultUpload.hidden = true;
+      // 刷新公共 TOP3 / 累计被打榜；若排行榜弹窗开着也同步刷新
+      loadMiniBoard();
+      loadCharacterHits().then(function () {
+        renderHitBoard();
+        if (!hitModal.hidden) renderHitModalBoard();
+      });
+      loadFullBoard().then(function (list) {
+        if (list && playerId) {
+          for (var i = 0; i < list.length; i++) {
+            if (list[i].player_id === playerId) {
+              resultTop10.hidden = false;
+              break;
+            }
+          }
+        }
+      });
+    }).catch(function () {
+      if (attempt === 1) {
+        // 允许一次轻量自动重试（继续用同一个 round_id，数据库幂等）
+        setTimeout(function () { submitRoundScore(2); }, 1200);
+      } else {
+        resultUpload.textContent = "成绩暂未上传";
+        resultUpload.hidden = false;
+      }
+    });
+  }
+
+  /* ============ 按钮状态 + 姓名锁定 ============ */
+  function updateNameLock() {
+    var locked = (state === STATE.COUNTDOWN || state === STATE.PLAYING || state === STATE.PAUSED);
+    playerNameInput.disabled = locked;
+  }
+
+  function updateButtons() {
+    if (state === STATE.IDLE) {
+      startBtn.textContent = "开始游戏";
+      pauseBtn.textContent = "暂停";
+      pauseBtn.disabled = true;
+    } else if (state === STATE.COUNTDOWN) {
+      startBtn.textContent = "重新开始";
+      pauseBtn.textContent = "暂停";
+      pauseBtn.disabled = true;
+    } else if (state === STATE.PLAYING) {
+      startBtn.textContent = "重新开始";
+      pauseBtn.textContent = "暂停";
+      pauseBtn.disabled = false;
+    } else if (state === STATE.PAUSED) {
+      startBtn.textContent = "重新开始";
+      pauseBtn.textContent = "继续";
+      pauseBtn.disabled = false;
+    } else if (state === STATE.GAMEOVER) {
+      startBtn.textContent = "再来一局";
+      pauseBtn.textContent = "暂停";
+      pauseBtn.disabled = true;
+    }
+    updateNameLock();
+  }
+
+  function toggleSound() {
+    global.AudioManager.setEnabled(!global.AudioManager.isEnabled());
+    if (global.AudioManager.isEnabled()) {
+      soundIcon.textContent = "🔊";
+      soundLabel.textContent = "声音";
+      if (state === STATE.PLAYING) global.AudioManager.resumeBgm();
+    } else {
+      soundIcon.textContent = "🔇";
+      soundLabel.textContent = "静音";
+    }
+  }
+
+  /* ============ 暂停遮罩 ============ */
+  function showPauseOverlay() { pauseOverlay.hidden = false; }
+  function hidePauseOverlay() { pauseOverlay.hidden = true; }
+
+  /* ============ 结果弹窗 ============ */
+  function showResultModal() {
+    resultScore.textContent = score;
+    resultHits.textContent = hits;
+    resultHigh.textContent = highscore;
+    resultRecord.hidden = !newRecord;
+    resultTop10.hidden = true;
+    resultUpload.hidden = true;
+    resultModal.hidden = false;
+  }
+
+  function hideResultModal() { resultModal.hidden = true; }
+
+  /* ============ 公共排行榜渲染 ============ */
+  function appendMiniEmpty(text) {
+    var li = document.createElement("li");
+    li.className = "mini-empty";
+    li.textContent = text;
+    miniBoard.appendChild(li);
+  }
+
+  function renderMiniBoard() {
+    miniBoard.innerHTML = "";
+    if (publicLeaderboardFailed) {
+      appendMiniEmpty("排行榜暂时无法连接");
+      return;
+    }
+    var list = publicLeaderboardCache || [];
+    if (list.length === 0) {
+      appendMiniEmpty("暂无记录，快来挑战吧！");
+      return;
+    }
+    for (var i = 0; i < Math.min(3, list.length); i++) {
+      var e = list[i];
+      var li = document.createElement("li");
+      if (playerId && e.player_id === playerId) li.classList.add("highlight");
+      var nameEl = document.createElement("span");
+      nameEl.className = "mini-name";
+      nameEl.textContent = e.player_name || "玩家";
+      var meta = document.createElement("span");
+      meta.textContent = (e.hits || 0) + " 击";
+      var sc = document.createElement("span");
+      sc.className = "mini-score";
+      sc.textContent = (e.score || 0) + " 分";
+      li.appendChild(nameEl);
+      li.appendChild(meta);
+      li.appendChild(sc);
+      miniBoard.appendChild(li);
+    }
+  }
+
+  function renderFullBoard() {
+    fullBoard.innerHTML = "";
+    if (publicLeaderboardFailed) {
+      var err = document.createElement("li");
+      err.className = "fb-empty";
+      err.textContent = "排行榜暂时无法连接";
+      fullBoard.appendChild(err);
+      return;
+    }
+    var list = publicLeaderboardCache10 || [];
+    if (list.length === 0) {
+      var empty = document.createElement("li");
+      empty.className = "fb-empty";
+      empty.textContent = "暂无记录，快来挑战吧！";
+      fullBoard.appendChild(empty);
+      return;
+    }
+    for (var i = 0; i < list.length; i++) {
+      var e = list[i];
+      var li = document.createElement("li");
+      var isMe = !!(playerId && e.player_id === playerId);
+      if (isMe) li.classList.add("highlight");
+      var nameEl = document.createElement("span");
+      nameEl.className = "fb-name";
+      nameEl.textContent = e.player_name || "玩家";
+      if (isMe) {
+        var tag = document.createElement("span");
+        tag.className = "fb-me";
+        tag.textContent = "我的成绩";
+        li.appendChild(nameEl);
+        li.appendChild(tag);
+      } else {
+        li.appendChild(nameEl);
+      }
+      var scoreEl = document.createElement("span");
+      scoreEl.className = "fb-score";
+      scoreEl.textContent = (e.score || 0) + " 分";
+      var meta = document.createElement("span");
+      meta.className = "fb-meta";
+      meta.textContent = (e.hits || 0) + " 击 · " + fmtDateTime(e.created_at);
+      li.appendChild(scoreEl);
+      li.appendChild(meta);
+      fullBoard.appendChild(li);
+    }
+  }
+
+  function loadMiniBoard() {
+    if (!global.Supabase.isConfigured()) {
+      publicLeaderboardFailed = true;
+      renderMiniBoard();
+      return Promise.resolve();
+    }
+    return global.Supabase.getPublicLeaderboard(3).then(function (list) {
+      publicLeaderboardCache = list || [];
+      publicLeaderboardFailed = false;
+      renderMiniBoard();
+    }).catch(function () {
+      publicLeaderboardFailed = true;
+      renderMiniBoard();
+    });
+  }
+
+  function loadFullBoard() {
+    if (!global.Supabase.isConfigured()) {
+      publicLeaderboardFailed = true;
+      renderFullBoard();
+      return Promise.resolve(null);
+    }
+    return global.Supabase.getPublicLeaderboard(10).then(function (list) {
+      publicLeaderboardCache10 = list || [];
+      publicLeaderboardFailed = false;
+      renderFullBoard();
+      return publicLeaderboardCache10;
+    }).catch(function () {
+      publicLeaderboardFailed = true;
+      renderFullBoard();
+      return null;
+    });
+  }
+
+  function loadCharacterHits() {
+    if (!global.Supabase.isConfigured()) {
+      characterHitFailed = true;
+      characterHitCache = null;
+      return Promise.resolve();
+    }
+    return global.Supabase.getCharacterHitLeaderboard().then(function (list) {
+      characterHitCache = list || [];
+      characterHitFailed = false;
+    }).catch(function () {
+      characterHitFailed = true;
+      characterHitCache = null;
+    });
+  }
+
+  function showBoardModal() {
+    boardModal.hidden = false;
+    loadFullBoard();
+  }
+
+  function hideBoardModal() { boardModal.hidden = true; }
+
+  /* ============ 被打榜弹窗 ============ */
+  function showHitModal() {
+    hitModalTab = hitBoardTab;
+    updateHitTabs();
+    renderHitModalBoard();
+    hitModal.hidden = false;
+  }
+
+  function hideHitModal() { hitModal.hidden = true; }
+
+  /* ============ 跟随锤子光标 ============ */
+  function showHammer() { hammerCursor.hidden = false; }
+  function hideHammer() { hammerCursor.hidden = true; }
+
+  function moveHammer(e) {
+    if (state !== STATE.PLAYING) return;
+    showHammer();
+    hammerCursor.style.left = (e.clientX - 31) + "px";
+    hammerCursor.style.top = (e.clientY - 40) + "px";
+  }
+
+  function smashHammer() {
+    if (hammerCursor.hidden) return;
+    hammerCursor.classList.remove("smash");
+    void hammerCursor.offsetWidth;
+    hammerCursor.classList.add("smash");
+    setTimeout(function () { hammerCursor.classList.remove("smash"); }, 200);
+  }
+
+  /* ============ 初始化 ============ */
+  function preloadAssets() {
+    for (var i = 0; i < global.CHARACTERS.length; i++) {
+      var img = new Image();
+      img.src = global.CHARACTERS[i].image;
+    }
+  }
+
+  function bindEvents() {
+    startBtn.addEventListener("click", startGame);
+    pauseBtn.addEventListener("click", function () {
+      if (state === STATE.PLAYING) pauseGame();
+      else if (state === STATE.PAUSED) resumeGame();
+    });
+    soundBtn.addEventListener("click", toggleSound);
+    btnViewBoard.addEventListener("click", showBoardModal);
+    btnReplay.addEventListener("click", startGame);
+    btnResultBoard.addEventListener("click", function () {
+      hideResultModal();
+      showBoardModal();
+    });
+    btnCloseBoard.addEventListener("click", hideBoardModal);
+    btnCloseBoard2.addEventListener("click", hideBoardModal);
+    btnResume.addEventListener("click", resumeGame);
+    btnCloseResult.addEventListener("click", hideResultModal);
+
+    // 被打榜
+    btnViewHits.addEventListener("click", showHitModal);
+    btnCloseHit.addEventListener("click", hideHitModal);
+    btnCloseHit2.addEventListener("click", hideHitModal);
+
+    hitBoardTabButtons.forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        hitBoardTab = btn.dataset.tab;
+        updateHitTabs();
+        renderHitBoard();
+      });
+    });
+
+    hitModalTabButtons.forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        hitModalTab = btn.dataset.tab;
+        updateHitTabs();
+        renderHitModalBoard();
+      });
+    });
+
+    // 姓名输入：失焦时空名回填「玩家」
+    playerNameInput.addEventListener("blur", function () {
+      if (playerNameInput.disabled) return;
+      applyNormalizedName();
+    });
+
+    // 排行榜弹窗：点击蒙层仍可关闭
+    boardModal.addEventListener("click", function (e) {
+      if (e.target === boardModal) hideBoardModal();
+    });
+    hitModal.addEventListener("click", function (e) {
+      if (e.target === hitModal) hideHitModal();
+    });
+
+    board.addEventListener("pointermove", moveHammer);
+    board.addEventListener("pointerenter", function () {
+      if (state === STATE.PLAYING) {
+        showHammer();
+        board.classList.add("cursor-hammer");
+      }
+    });
+    board.addEventListener("pointerleave", function () {
+      hideHammer();
+      board.classList.remove("cursor-hammer");
+    });
+    board.addEventListener("pointerdown", function (e) {
+      if (state !== STATE.PLAYING) return;
+      smashHammer();
+      onBoardPointerDown(e);
+    });
+  }
+
+  function init() {
+    global.AudioManager.init();
+    buildBoard();
+    clearLayout();
+
+    // 读取 / 创建匿名 player_id（刷新后不变）
+    playerId = getOrCreatePlayerId();
+
+    // 读取玩家姓名（空则显示空，placeholder 提示；开始游戏时会回填「玩家」）
+    playerNameInput.value = loadPlayerName();
+
+    highscore = loadHighscore();
+    roundCharacterHits = emptyRoundHits();
+    updateStatsUI();
+    updateButtons();
+    renderMiniBoard();
+    renderHitBoard();
+    updateHitTabs();
+    preloadAssets();
+    bindEvents();
+
+    // 并行加载远端数据，不阻塞游戏初始化
+    loadMiniBoard();
+    loadCharacterHits().then(function () {
+      renderHitBoard();
+    });
+  }
+
+  init();
+})(window);

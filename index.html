@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>下回打你 · 打土拨鼠</title>
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <div class="page">
+    <div class="game-container" id="game-container">
+
+      <!-- 顶部信息栏 -->
+      <header class="topbar">
+        <div class="topbar-left">
+          <img class="topbar-hammer" src="assets/ui/hammer.png" alt="锤子" />
+          <img class="topbar-banner" src="assets/ui/banner.png" alt="下回打你" />
+        </div>
+        <div class="topbar-right">
+          <div class="stat">
+            <span class="stat-label">当前得分</span>
+            <span class="stat-value stat-score" id="score">0</span>
+          </div>
+          <div class="stat">
+            <span class="stat-label">剩余时间</span>
+            <span class="stat-value stat-time" id="time">00:30</span>
+          </div>
+          <div class="stat">
+            <span class="stat-label">最高分</span>
+            <span class="stat-value stat-high" id="highscore">0</span>
+          </div>
+          <div class="stat">
+            <span class="stat-label">击中数</span>
+            <span class="stat-value stat-hits" id="hits">0</span>
+          </div>
+        </div>
+      </header>
+
+      <!-- 主体 -->
+      <main class="main">
+        <!-- 左侧九宫格 -->
+        <section class="board-wrap">
+          <div class="board" id="board"></div>
+          <div class="combo-indicator" id="combo-indicator" aria-hidden="true">
+            <span class="combo-text">COMBO ×2</span>
+            <span class="combo-sub">连续击中 得分翻倍</span>
+          </div>
+          <div class="countdown-overlay" id="countdown-overlay" hidden>
+            <div class="countdown-number" id="countdown-number">3</div>
+          </div>
+        </section>
+
+        <!-- 右侧玩法说明 + 排行榜 -->
+        <aside class="sidebar">
+          <div class="card howto-card">
+            <h2 class="card-title">玩法说明</h2>
+            <ul class="howto-list">
+              <li><span class="dot dot-blue"></span>土拨鼠随机出现，点击即可得分</li>
+              <li><span class="dot dot-orange"></span>30 秒挑战，时间结束游戏结束</li>
+              <li><span class="dot dot-yellow"></span>连续击中，得分 ×2</li>
+              <li><span class="dot dot-green"></span>空击会中断连击</li>
+            </ul>
+          </div>
+
+          <div class="card leaderboard-card">
+            <div class="leaderboard-head">
+              <h2 class="card-title">排行榜</h2>
+              <button class="btn btn-ghost" id="btn-view-board">查看排行</button>
+            </div>
+            <ol class="mini-board" id="mini-board">
+              <li class="mini-empty">暂无记录，快来挑战吧！</li>
+            </ol>
+          </div>
+
+          <div class="card hit-board-card">
+            <div class="hit-board-head">
+              <h2 class="card-title">被打榜</h2>
+              <div class="segmented" id="hit-board-tabs" role="tablist">
+                <button class="segment active" type="button" data-tab="round">本轮</button>
+                <button class="segment" type="button" data-tab="all">累计</button>
+              </div>
+            </div>
+            <ol class="hit-board" id="hit-board-list"></ol>
+            <div class="hit-board-foot">
+              <button class="btn btn-ghost" id="btn-view-hits">查看全部</button>
+            </div>
+          </div>
+        </aside>
+      </main>
+
+      <!-- 底部控制 -->
+      <footer class="bottom-controls">
+        <label class="name-field" for="player-name">
+          <span class="name-label">玩家姓名</span>
+          <input class="name-input" id="player-name" type="text" maxlength="12" placeholder="输入你的名字" autocomplete="off" />
+        </label>
+        <button class="btn btn-soft" id="btn-sound" title="声音开关">
+          <span class="btn-icon" id="sound-icon">🔊</span>
+          <span id="sound-label">声音</span>
+        </button>
+        <button class="btn btn-primary" id="btn-start">开始游戏</button>
+        <button class="btn btn-soft" id="btn-pause" disabled>暂停</button>
+      </footer>
+
+    </div>
+  </div>
+
+  <!-- 暂停遮罩 -->
+  <div class="pause-overlay" id="pause-overlay" hidden>
+    <div class="pause-card">
+      <div class="pause-emoji">⏸️</div>
+      <div class="pause-title">已暂停</div>
+      <div class="pause-sub">游戏已暂停</div>
+      <button class="btn btn-primary pause-resume" id="btn-resume">继续游戏</button>
+    </div>
+  </div>
+
+  <!-- 游戏结束弹窗 -->
+  <div class="modal-backdrop" id="result-modal" hidden>
+    <div class="modal result-modal">
+      <button class="modal-close result-close" id="btn-close-result" aria-label="关闭">✕</button>
+      <div class="result-title">本局结束</div>
+      <div class="result-record" id="result-record" hidden>🎉 新纪录！</div>
+      <div class="result-top10" id="result-top10" hidden>🏆 进入排行榜 TOP 10！</div>
+      <div class="result-stats">
+        <div class="result-row"><span>本局得分</span><strong id="result-score">0</strong></div>
+        <div class="result-row"><span>击中</span><strong id="result-hits">0</strong></div>
+        <div class="result-row"><span>最高分</span><strong id="result-high">0</strong></div>
+      </div>
+      <div class="result-upload" id="result-upload" hidden>成绩暂未上传</div>
+      <div class="modal-actions">
+        <button class="btn btn-primary" id="btn-replay">再来一局</button>
+        <button class="btn btn-soft" id="btn-result-board">查看排行榜</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 排行榜弹窗 -->
+  <div class="modal-backdrop" id="board-modal" hidden>
+    <div class="modal board-modal">
+      <div class="modal-head">
+        <h2 class="modal-title">🏆 排行榜 TOP 10</h2>
+        <button class="modal-close" id="btn-close-board" aria-label="关闭">✕</button>
+      </div>
+      <ol class="full-board" id="full-board"></ol>
+      <div class="modal-actions board-actions">
+        <button class="btn btn-primary" id="btn-close-board2">关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 被打榜弹窗 -->
+  <div class="modal-backdrop" id="hit-modal" hidden>
+    <div class="modal hit-modal">
+      <div class="modal-head">
+        <h2 class="modal-title">被打榜</h2>
+        <button class="modal-close" id="btn-close-hit" aria-label="关闭">✕</button>
+      </div>
+      <div class="segmented segmented-centered" id="hit-modal-tabs" role="tablist">
+        <button class="segment active" type="button" data-tab="round">本轮</button>
+        <button class="segment" type="button" data-tab="all">累计</button>
+      </div>
+      <ol class="full-hit-board" id="full-hit-board"></ol>
+      <div class="modal-actions board-actions">
+        <button class="btn btn-primary" id="btn-close-hit2">关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 跟随鼠标的锤子 -->
+  <div id="hammer-cursor" hidden><img src="assets/ui/hammer.png" alt="" /></div>
+
+  <script src="js/characters.js"></script>
+  <script src="js/audio.js"></script>
+  <script src="js/supabase-config.js"></script>
+  <script src="js/supabase.js"></script>
+  <script src="js/game.js"></script>
+</body>
+</html>
