@@ -71,6 +71,7 @@
 
   var boardModal = document.getElementById("board-modal");
   var fullBoard = document.getElementById("full-board");
+  var boardModalScroll = boardModal.querySelector(".modal-scroll");
   var miniBoard = document.getElementById("mini-board");
   var btnCloseBoard = document.getElementById("btn-close-board");
   var btnCloseBoard2 = document.getElementById("btn-close-board2");
@@ -123,6 +124,7 @@
   var publicLeaderboardFailed = false; // TOP3（首页）
   var publicLeaderboardCache10 = null; // TOP10（总榜 authoritative）
   var publicLeaderboardFailed10 = false; // TOP10（modal 总榜）
+  var publicLeaderboardRequestPromise = null; // 总榜在途请求（复用同一请求；settle 后复位以便失败重试）
   var characterHitCache = null;
   var characterHitFailed = false;
 
@@ -132,6 +134,7 @@
   var filteredLeaderboardCache = null; // 手机榜/网页榜的筛选结果（仅 modal 显示用）
   var filteredLeaderboardFailed = false;
   var filteredLeaderboardRequestSeq = 0; // 防串榜：单调递增请求序号
+  var focusMyRowAfterRender = false; // 打开/切换排行榜后，渲染完成时定位到我的成绩一次
 
   /* ============ 工具函数 ============ */
   function rand(min, max) { return min + Math.random() * (max - min); }
@@ -1159,6 +1162,25 @@
       li.appendChild(meta);
       fullBoard.appendChild(li);
     }
+    if (focusMyRowAfterRender) {
+      focusMyRowAfterRender = false;
+      requestAnimationFrame(focusMyLeaderboardRowIfNeeded);
+    }
+  }
+
+  /* 排行榜 modal 内智能定位到「我的成绩」：已完整可见则不动，否则滚到可视区中部。 */
+  function focusMyLeaderboardRowIfNeeded() {
+    var container = boardModalScroll;
+    if (!container || container.clientHeight <= 0) return;
+    var row = fullBoard.querySelector("li.highlight");
+    if (!row) return; // 当前 tab 没有我：保持顶部
+    var cr = container.getBoundingClientRect();
+    var rr = row.getBoundingClientRect();
+    var top = cr.top + container.clientTop;
+    var bottom = top + container.clientHeight;
+    if (rr.top >= top && rr.bottom <= bottom) return; // 已完整可见
+    var target = container.scrollTop + (rr.top - top) - (container.clientHeight / 2) + (rr.height / 2);
+    container.scrollTop = Math.max(0, target);
   }
 
   /* 从公共排行榜结果刷新全站纪录（第 1 名 score）。
@@ -1211,26 +1233,32 @@
   }
 
   function loadFullBoard() {
+    // 复用已在途的总榜请求（返回同一个 Promise），避免重复请求导致二次 render 重置 modal scrollTop。
+    if (publicLeaderboardRequestPromise) return publicLeaderboardRequestPromise;
     if (!global.Supabase.isConfigured()) {
       publicLeaderboardFailed10 = true;
       renderFullBoard();
       return Promise.resolve(null);
     }
-    // 重试前先恢复为 loading（cache10 仍为 null，failed10 置 false），
-    // 避免上一次失败状态挡住本次 loading 展示。
+    // 发起前把失败态恢复为 loading（cache10 仍为 null，failed10 置 false）。
     publicLeaderboardFailed10 = false;
     renderFullBoard();
-    return global.Supabase.getPublicLeaderboardV2(10, null).then(function (list) {
+    var p = global.Supabase.getPublicLeaderboardV2(10, null).then(function (list) {
+      publicLeaderboardRequestPromise = null;
       publicLeaderboardCache10 = list || [];
       publicLeaderboardFailed10 = false;
-      renderFullBoard();
       applyGlobalRecord(publicLeaderboardCache10);
+      // 只有当前仍在总榜 tab 才刷新 modal，避免后台总榜返回污染手机榜/网页榜。
+      if (boardTab === "total") renderFullBoard();
       return publicLeaderboardCache10;
     }).catch(function () {
+      publicLeaderboardRequestPromise = null;
       publicLeaderboardFailed10 = true;
-      renderFullBoard();
+      if (boardTab === "total") renderFullBoard();
       return null;
     });
+    publicLeaderboardRequestPromise = p;
+    return p;
   }
 
   /* 手机榜/网页榜筛选结果（仅 modal 显示用，绝不写回 authoritative 状态） */
@@ -1287,6 +1315,7 @@
   function showBoardModal() {
     boardModal.hidden = false;
     updateBoardTabs();
+    focusMyRowAfterRender = true; // 打开时渲染完成后定位到我的成绩一次
     if (boardTab === "total") {
       // 总榜 authoritative；尚未加载成功（含失败）就允许重试
       if (!publicLeaderboardCache10) {
@@ -1391,6 +1420,7 @@
       btn.addEventListener("click", function () {
         boardTab = btn.dataset.tab;
         updateBoardTabs();
+        focusMyRowAfterRender = true; // 切 tab 渲染完成后定位到我的成绩一次
         if (boardTab === "total") {
           if (!publicLeaderboardCache10) loadFullBoard();
           else renderFullBoard();

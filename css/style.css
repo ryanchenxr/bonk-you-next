@@ -725,6 +725,20 @@ body {
   overflow: auto;
 }
 
+/* 排行榜弹窗：圆角外壳与内部滚动分离，避免原生 scrollbar track 突破圆角露出白色方角 */
+.modal.board-modal {
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+}
+.modal.board-modal .modal-scroll {
+  overflow: auto;
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 28px;
+}
+
 @keyframes pop-in {
   from { transform: translateY(14px) scale(0.96); opacity: 0; }
   to   { transform: translateY(0) scale(1); opacity: 1; }

@@ -148,18 +148,20 @@
   <!-- 排行榜弹窗 -->
   <div class="modal-backdrop" id="board-modal" hidden>
     <div class="modal board-modal">
-      <div class="modal-head">
-        <h2 class="modal-title">🏆 排行榜 TOP 10</h2>
-        <button class="modal-close" id="btn-close-board" aria-label="关闭">✕</button>
-      </div>
-      <div class="segmented segmented-centered" id="board-tabs" role="tablist">
-        <button class="segment active" type="button" data-tab="total">总榜</button>
-        <button class="segment" type="button" data-tab="mobile">手机榜</button>
-        <button class="segment" type="button" data-tab="web">网页榜</button>
-      </div>
-      <ol class="full-board" id="full-board"></ol>
-      <div class="modal-actions board-actions">
-        <button class="btn btn-primary" id="btn-close-board2">关闭</button>
+      <div class="modal-scroll">
+        <div class="modal-head">
+          <h2 class="modal-title">🏆 排行榜 TOP 10</h2>
+          <button class="modal-close" id="btn-close-board" aria-label="关闭">✕</button>
+        </div>
+        <div class="segmented segmented-centered" id="board-tabs" role="tablist">
+          <button class="segment active" type="button" data-tab="total">总榜</button>
+          <button class="segment" type="button" data-tab="mobile">手机榜</button>
+          <button class="segment" type="button" data-tab="web">网页榜</button>
+        </div>
+        <ol class="full-board" id="full-board"></ol>
+        <div class="modal-actions board-actions">
+          <button class="btn btn-primary" id="btn-close-board2">关闭</button>
+        </div>
       </div>
     </div>
   </div>
