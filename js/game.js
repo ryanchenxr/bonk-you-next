@@ -31,6 +31,7 @@
 
   /* ============ DOM 引用 ============ */
   var board = document.getElementById("board");
+  var gameContainer = document.getElementById("game-container");
   var boardWrap = document.querySelector(".board-wrap");
   var scoreEl = document.getElementById("score");
   var timeEl = document.getElementById("time");
@@ -50,6 +51,9 @@
   var btnMain = document.getElementById("btn-main");
   var boardTabButtons = document.querySelectorAll("#board-tabs .segment");
   var howtoCard = document.querySelector(".howto-card");
+  var howtoToggle = document.getElementById("howto-toggle");
+  var howtoToggleLabel = document.getElementById("howto-toggle-label");
+  var howtoToggleArrow = document.getElementById("howto-toggle-arrow");
 
   var pauseOverlay = document.getElementById("pause-overlay");
   var btnResume = document.getElementById("btn-resume");
@@ -736,7 +740,8 @@
     updateStatsUI();
     updateComboUI(false);
 
-    startCountdown();
+    // 手机端：先收起玩法说明 + 定位回游戏主视图，再进入倒计时（届时锁定滚动）。
+    focusMobileGameView(startCountdown);
   }
 
   function startCountdown() {
@@ -805,22 +810,25 @@
 
   function resumeGame() {
     if (state !== STATE.PAUSED) return;
-    state = STATE.PLAYING;
-    global.AudioManager.resumeBgm();
-    lastTick = Date.now();
-    tickTimer = setInterval(tick, 100);
-    for (var i = 0; i < 9; i++) {
-      var s = slots[i];
-      if (s.active) {
-        s.stayEnd = Date.now() + s.remaining;
-        s.hideTimer = setTimeout(function (idx) {
-          return function () { hideMole(idx, false); };
-        }(i), s.remaining);
+    // 手机端：先收起玩法说明 + 定位回游戏主视图，再恢复 PLAYING 并锁定滚动（scroll before lock）。
+    focusMobileGameView(function () {
+      state = STATE.PLAYING;
+      global.AudioManager.resumeBgm();
+      lastTick = Date.now();
+      tickTimer = setInterval(tick, 100);
+      for (var i = 0; i < 9; i++) {
+        var s = slots[i];
+        if (s.active) {
+          s.stayEnd = Date.now() + s.remaining;
+          s.hideTimer = setTimeout(function (idx) {
+            return function () { hideMole(idx, false); };
+          }(i), s.remaining);
+        }
       }
-    }
-    hidePauseOverlay();
-    updateButtons();
-    scheduleNextRound();
+      hidePauseOverlay();
+      updateButtons();
+      scheduleNextRound();
+    });
   }
 
   /* ============ 结束 ============ */
@@ -976,13 +984,38 @@
     }
   }
 
-  /* 手机端：active 时收起玩法说明 + 锁定页面滚动/缩放；恢复时还原。 */
+  /* 玩法说明折叠是独立 UI disclosure state：手动展开/收起；开始新一局时强制折叠。 */
+  function setHowtoCollapsed(collapsed) {
+    if (!howtoCard) return;
+    howtoCard.classList.toggle("collapsed", collapsed);
+    if (howtoToggle) {
+      howtoToggle.setAttribute("aria-expanded", collapsed ? "false" : "true");
+      if (howtoToggleLabel) howtoToggleLabel.textContent = collapsed ? "查看规则" : "收起";
+      if (howtoToggleArrow) howtoToggleArrow.textContent = collapsed ? "▼" : "▲";
+    }
+  }
+
+  /* 手机端：收起玩法说明 + 定位回游戏主视图，再执行回调；桌面端直接执行回调。
+     顺序保证 scroll 发生在 game-active 锁定之前，避免锁定后定位失效。 */
+  function focusMobileGameView(callback) {
+    if (clientType !== "mobile") {
+      callback();
+      return;
+    }
+    setHowtoCollapsed(true);
+    requestAnimationFrame(function () {
+      if (gameContainer) gameContainer.scrollIntoView({ block: "start" });
+      callback();
+    });
+  }
+
+  /* 手机端：active 时锁定页面滚动/缩放，并强制收起玩法说明；非 active 不自动展开。 */
   function updateMobileChrome() {
     var mobile = (clientType === "mobile");
     var active = mobile && (state === STATE.COUNTDOWN || state === STATE.PLAYING);
     document.body.classList.toggle("game-active", active);
-    if (howtoCard) {
-      howtoCard.classList.toggle("collapsed", active);
+    if (active) {
+      setHowtoCollapsed(true);
     }
   }
 
@@ -1380,6 +1413,15 @@
       applyNormalizedName();
     });
 
+    // 玩法说明折叠开关（仅手机端；倒计时/游戏中强制折叠，不允许手动展开）
+    if (howtoToggle) {
+      howtoToggle.addEventListener("click", function () {
+        if (clientType !== "mobile") return;
+        if (state === STATE.COUNTDOWN || state === STATE.PLAYING) return;
+        setHowtoCollapsed(!howtoCard.classList.contains("collapsed"));
+      });
+    }
+
     // 排行榜 / 被打榜弹窗：点击遮罩层不再关闭，只能通过右上角 × 或底部「关闭」按钮关闭。
 
     board.addEventListener("pointermove", moveHammer);
@@ -1408,6 +1450,9 @@
     // 设备识别（会话内缓存）：mobile / web
     clientType = detectClientType();
     boardTab = "total";
+
+    // 手机端玩法说明默认折叠；桌面默认展开
+    setHowtoCollapsed(clientType === "mobile");
 
     // 读取 / 创建匿名 player_id（刷新后不变）
     playerId = getOrCreatePlayerId();

@@ -52,12 +52,18 @@
 
         <!-- 右侧玩法说明 + 排行榜 -->
         <aside class="sidebar">
-          <div class="card howto-card">
-            <h2 class="card-title">玩法说明</h2>
-            <ul class="howto-list">
-              <li><span class="dot dot-blue"></span>土拨鼠随机出现，点击即可得分</li>
-              <li><span class="dot dot-orange"></span>30 秒挑战，时间结束游戏结束</li>
-              <li><span class="dot dot-yellow"></span>连续击中，得分 ×2</li>
+          <div class="card howto-card" id="howto-card">
+            <div class="howto-head">
+              <h2 class="card-title">玩法说明</h2>
+              <button class="howto-toggle" type="button" id="howto-toggle" aria-expanded="false" aria-controls="howto-list">
+                <span id="howto-toggle-label">查看规则</span>
+                <span id="howto-toggle-arrow" aria-hidden="true">▼</span>
+              </button>
+            </div>
+            <ul class="howto-list" id="howto-list">
+              <li><span class="dot dot-blue"></span>每局 30 秒，倒计时结束本局结束</li>
+              <li><span class="dot dot-orange"></span>击中土拨鼠，每次 +10 分</li>
+              <li><span class="dot dot-yellow"></span>连续命中，后续每击 +20 分</li>
               <li><span class="dot dot-green"></span>空击会中断连击</li>
             </ul>
           </div>
