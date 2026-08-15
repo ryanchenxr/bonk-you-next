@@ -285,14 +285,16 @@ body {
 /* ============ 连击提示 ============ */
 .combo-indicator {
   position: absolute;
-  top: 26px;
+  top: 0;
   left: 50%;
   transform: translateX(-50%);
+  width: max-content;
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   align-items: center;
-  gap: 2px;
-  padding: 7px 16px;
+  gap: 6px;
+  height: 32px;
+  padding: 0 14px;
   background: rgba(10, 26, 107, 0.88);
   color: #fff;
   border-radius: 999px;
@@ -314,13 +316,14 @@ body {
 }
 
 .combo-text {
-  font-size: 20px;
+  font-size: 16px;
   font-weight: 900;
   color: var(--orange);
-  letter-spacing: 2px;
+  letter-spacing: 1px;
+  white-space: nowrap;
 }
 
-.combo-sub { font-size: 11px; opacity: 0.85; }
+.combo-sub { font-size: 10px; opacity: 0.85; white-space: nowrap; }
 
 /* ============ 开局 3 秒倒计时 ============ */
 .countdown-overlay {
@@ -1305,4 +1308,18 @@ body {
   .hit-board { gap: 4px; min-height: 66px; }
   .hit-board li { padding: 4px 8px; }
   .hit-board-foot { margin-top: 6px; }
+
+  /* 桌面名牌：固定高度 + 受控行高，保证文字垂直居中、不溢出胶囊；bottom 恢复 0，完整待在 slot 内 */
+  .nameplate {
+    height: 24px;
+    line-height: 1.2;
+  }
+
+  /* 桌面洞口系统整体上移：给 24px 名牌留出稳定间距，同时不把 mole viewport 顶出 slot。
+     bottom 至少 24px(名牌)+4px(间距)=28px；大桌面仍保持 16% 比例。 */
+  .hole,
+  .mole-viewport,
+  .hole-front-rim {
+    bottom: max(16%, 28px);
+  }
 }
