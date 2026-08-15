@@ -506,6 +506,7 @@ body {
   display: flex;
   flex-direction: column;
   gap: 5px;
+  min-height: 94px;
 }
 
 .hit-board li {
@@ -550,7 +551,7 @@ body {
 
 .hit-board .hit-count { font-weight: 800; color: var(--orange); margin-left: auto; white-space: nowrap; flex-shrink: 0; }
 
-.hit-board .hit-empty { justify-content: center; color: #98A4C8; padding: 6px 0; }
+.hit-board .hit-empty { flex: 1; justify-content: center; color: #98A4C8; padding: 0; }
 
 .hit-board-foot {
   display: flex;
@@ -820,19 +821,26 @@ body {
 }
 
 .full-board li {
-  display: flex;
+  display: grid;
+  grid-template-columns: auto minmax(0, auto) auto 1fr auto;
+  grid-template-areas:
+    "rank name badge . score"
+    ".    meta meta  meta meta";
   align-items: center;
-  gap: 10px;
+  column-gap: 10px;
+  row-gap: 3px;
   padding: 10px 12px;
   border-radius: 11px;
   background: #F6F8FF;
   font-size: 14px;
   color: var(--blue-ink);
+  min-width: 0;
 }
 
 .full-board li::before {
   counter-increment: full;
   content: counter(full);
+  grid-area: rank;
   width: 24px;
   height: 24px;
   border-radius: 50%;
@@ -843,7 +851,6 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  flex: none;
 }
 
 .full-board li:nth-child(1)::before { background: var(--orange); }
@@ -856,16 +863,16 @@ body {
 }
 
 .full-board .fb-name {
+  grid-area: name;
   font-weight: 800;
   color: var(--blue-ink);
-  flex: none;
-  max-width: 40%;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .full-board .fb-me {
-  flex: none;
+  grid-area: badge;
   font-size: 11px;
   font-weight: 700;
   color: #7A3B00;
@@ -874,8 +881,20 @@ body {
   padding: 2px 7px;
   letter-spacing: 1px;
 }
-.full-board .fb-score { font-weight: 900; color: var(--orange); font-size: 17px; white-space: nowrap; flex-shrink: 0; }
-.full-board .fb-meta { margin-left: auto; font-size: 12px; color: #7C88B4; text-align: right; white-space: nowrap; flex-shrink: 0; }
+.full-board .fb-score {
+  grid-area: score;
+  font-weight: 900;
+  color: var(--orange);
+  font-size: 17px;
+  white-space: nowrap;
+}
+.full-board .fb-meta {
+  grid-area: meta;
+  font-size: 12px;
+  color: #7C88B4;
+  text-align: left;
+  min-width: 0;
+}
 .full-board .fb-empty { justify-content: center; color: #98A4C8; padding: 24px; }
 
 /* ============ 被打榜完整弹窗列表 ============ */
@@ -883,14 +902,14 @@ body {
   list-style: none;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
 }
 
 .full-hit-board li {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 10px 12px;
+  padding: 8px 10px;
   border-radius: 11px;
   background: #F6F8FF;
   font-size: 14px;
@@ -926,6 +945,7 @@ body {
 .hit-board .hit-empty::before,
 .full-hit-board .hit-empty::before { content: none; }
 
+.hit-modal { padding: 20px; }
 .hit-modal .modal-title { letter-spacing: 1px; }
 
 /* ============ 结果弹窗：上传状态 / TOP10 ============ */
