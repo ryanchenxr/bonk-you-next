@@ -47,6 +47,9 @@
   var soundLabel = document.getElementById("sound-label");
   var btnViewBoard = document.getElementById("btn-view-board");
   var playerNameInput = document.getElementById("player-name");
+  var btnMain = document.getElementById("btn-main");
+  var boardTabButtons = document.querySelectorAll("#board-tabs .segment");
+  var howtoCard = document.querySelector(".howto-card");
 
   var pauseOverlay = document.getElementById("pause-overlay");
   var btnResume = document.getElementById("btn-resume");
@@ -108,19 +111,52 @@
   var submitAttempted = false;
 
   // 被打榜 tab 状态
-  var hitBoardTab = "round";   // "round" | "all"
+  var hitBoardTab = "all";   // "round" | "all"（首页默认显示累计）
   var hitModalTab = "round";
 
   // 远端数据缓存
   var publicLeaderboardCache = null;   // TOP3
-  var publicLeaderboardFailed = false;
-  var publicLeaderboardCache10 = null; // TOP10
+  var publicLeaderboardFailed = false; // TOP3（首页）
+  var publicLeaderboardCache10 = null; // TOP10（总榜 authoritative）
+  var publicLeaderboardFailed10 = false; // TOP10（modal 总榜）
   var characterHitCache = null;
   var characterHitFailed = false;
+
+  // 设备与排行榜 tab
+  var clientType = "web";  // 'mobile' | 'web'（页面加载后 detectClientType 缓存）
+  var boardTab = "total";  // 'total' | 'mobile' | 'web'
+  var filteredLeaderboardCache = null; // 手机榜/网页榜的筛选结果（仅 modal 显示用）
+  var filteredLeaderboardFailed = false;
+  var filteredLeaderboardRequestSeq = 0; // 防串榜：单调递增请求序号
 
   /* ============ 工具函数 ============ */
   function rand(min, max) { return min + Math.random() * (max - min); }
   function randInt(min, max) { return Math.floor(rand(min, max + 1)); }
+
+  /* 设备识别：优先 userAgentData.mobile，fallback 到移动 UA。不用 viewport width 判断。 */
+  function detectClientType() {
+    var ud = global.navigator && global.navigator.userAgentData;
+    if (ud && typeof ud.mobile === "boolean") {
+      return ud.mobile ? "mobile" : "web";
+    }
+    var ua = (global.navigator && global.navigator.userAgent) || "";
+    if (/Android|iPhone|iPad|iPod|Mobile|Silk|IEMobile/i.test(ua)) {
+      return "mobile";
+    }
+    // 现代 iPadOS Safari 使用 desktop-class / Mac UA，且可能无 userAgentData.mobile：
+    // 以「MacIntel 平台 + 多点触控」补判为 mobile，不引入 tablet 类别，也不看 viewport width。
+    var nav = global.navigator;
+    if (nav && nav.platform === "MacIntel" && typeof nav.maxTouchPoints === "number" && nav.maxTouchPoints > 1) {
+      return "mobile";
+    }
+    return "web";
+  }
+
+  function deviceLabel(type) {
+    if (type === "mobile") return "手机端";
+    if (type === "web") return "网页端";
+    return null;
+  }
 
   function shuffle(arr) {
     var a = arr.slice();
@@ -506,10 +542,12 @@
     return id;
   }
 
-  /* 开始游戏前统一规范化姓名，并让输入框显示有效值（空 -> 玩家）。 */
+  /* 规范化姓名：业务仍以「玩家」作为空名 fallback，但 UI 不再把「玩家」写回输入框，
+     空输入保持为空，让 placeholder「输入你的昵称」显示。 */
   function applyNormalizedName() {
-    var n = normalizePlayerName(playerNameInput.value);
-    playerNameInput.value = n;
+    var raw = (playerNameInput.value == null ? "" : String(playerNameInput.value)).trim();
+    var n = normalizePlayerName(raw);
+    playerNameInput.value = raw;
     savePlayerName(n);
     return n;
   }
@@ -604,9 +642,14 @@
       if (characterHitFailed) {
         appendHitEmpty(hitBoardList, "累计数据暂时无法连接");
       } else if (!characterHitCache) {
-        appendHitEmpty(hitBoardList, "加载中…");
+        appendHitEmpty(hitBoardList, "被打榜加载中…");
       } else {
-        renderHitEntriesTo(hitBoardList, normalizeAllEntries(characterHitCache), 3);
+        var allEntries = normalizeAllEntries(characterHitCache);
+        if (allEntries.length === 0) {
+          appendHitEmpty(hitBoardList, "累计暂无记录");
+        } else {
+          renderHitEntriesTo(hitBoardList, allEntries, 3);
+        }
       }
     }
   }
@@ -619,9 +662,14 @@
       if (characterHitFailed) {
         appendHitEmpty(fullHitBoard, "累计数据暂时无法连接");
       } else if (!characterHitCache) {
-        appendHitEmpty(fullHitBoard, "加载中…");
+        appendHitEmpty(fullHitBoard, "被打榜加载中…");
       } else {
-        renderHitEntriesTo(fullHitBoard, normalizeAllEntries(characterHitCache), 9);
+        var allEntries = normalizeAllEntries(characterHitCache);
+        if (allEntries.length === 0) {
+          appendHitEmpty(fullHitBoard, "累计暂无记录");
+        } else {
+          renderHitEntriesTo(fullHitBoard, allEntries, 9);
+        }
       }
     }
   }
@@ -819,10 +867,11 @@
       p_score: score,
       p_hits: hits,
       p_round_id: roundId,
-      p_character_hits: roundCharacterHits
+      p_character_hits: roundCharacterHits,
+      p_client_type: clientType
     };
 
-    global.Supabase.submitGameScore(payload).then(function () {
+    global.Supabase.submitGameScoreV2(payload).then(function () {
       scoreSubmitted = true;
       resultUpload.hidden = true;
       // 刷新公共 TOP3 / 累计被打榜；若排行榜弹窗开着也同步刷新
@@ -902,6 +951,39 @@
       pauseBtn.disabled = true;
     }
     updateNameLock();
+    updateMainButton();
+    updateMobileChrome();
+  }
+
+  /* 手机端唯一主按钮：复用单一 state，路由到现有 start/pause/resume。 */
+  function updateMainButton() {
+    if (!btnMain) return;
+    if (state === STATE.IDLE) {
+      btnMain.textContent = "开始游戏";
+      btnMain.disabled = false;
+    } else if (state === STATE.COUNTDOWN) {
+      btnMain.textContent = "开始游戏";
+      btnMain.disabled = true; // 倒计时中不允许二次启动
+    } else if (state === STATE.PLAYING) {
+      btnMain.textContent = "暂停";
+      btnMain.disabled = false;
+    } else if (state === STATE.PAUSED) {
+      btnMain.textContent = "继续";
+      btnMain.disabled = false;
+    } else if (state === STATE.GAMEOVER) {
+      btnMain.textContent = "再来一局";
+      btnMain.disabled = false;
+    }
+  }
+
+  /* 手机端：active 时收起玩法说明 + 锁定页面滚动/缩放；恢复时还原。 */
+  function updateMobileChrome() {
+    var mobile = (clientType === "mobile");
+    var active = mobile && (state === STATE.COUNTDOWN || state === STATE.PLAYING);
+    document.body.classList.toggle("game-active", active);
+    if (howtoCard) {
+      howtoCard.classList.toggle("collapsed", active);
+    }
   }
 
   function toggleSound() {
@@ -942,13 +1024,24 @@
     miniBoard.appendChild(li);
   }
 
+  function appendFbEmpty(text) {
+    var li = document.createElement("li");
+    li.className = "fb-empty";
+    li.textContent = text;
+    fullBoard.appendChild(li);
+  }
+
   function renderMiniBoard() {
     miniBoard.innerHTML = "";
     if (publicLeaderboardFailed) {
       appendMiniEmpty("排行榜暂时无法连接");
       return;
     }
-    var list = publicLeaderboardCache || [];
+    if (!publicLeaderboardCache) {
+      appendMiniEmpty("排行榜加载中…");
+      return;
+    }
+    var list = publicLeaderboardCache;
     if (list.length === 0) {
       appendMiniEmpty("暂无记录，快来挑战吧！");
       return;
@@ -960,12 +1053,19 @@
       var nameEl = document.createElement("span");
       nameEl.className = "mini-name";
       nameEl.textContent = e.player_name || "玩家";
+      li.appendChild(nameEl);
+      var dl = deviceLabel(e.client_type);
+      if (dl) {
+        var dEl = document.createElement("span");
+        dEl.className = "device-tag";
+        dEl.textContent = dl;
+        li.appendChild(dEl);
+      }
       var meta = document.createElement("span");
       meta.textContent = (e.hits || 0) + " 击";
       var sc = document.createElement("span");
       sc.className = "mini-score";
       sc.textContent = (e.score || 0) + " 分";
-      li.appendChild(nameEl);
       li.appendChild(meta);
       li.appendChild(sc);
       miniBoard.appendChild(li);
@@ -974,37 +1074,47 @@
 
   function renderFullBoard() {
     fullBoard.innerHTML = "";
-    if (publicLeaderboardFailed) {
-      var err = document.createElement("li");
-      err.className = "fb-empty";
-      err.textContent = "排行榜暂时无法连接";
-      fullBoard.appendChild(err);
+    var cache, failed;
+    if (boardTab === "total") {
+      cache = publicLeaderboardCache10;
+      failed = publicLeaderboardFailed10;
+    } else {
+      cache = filteredLeaderboardCache;
+      failed = filteredLeaderboardFailed;
+    }
+    if (failed) {
+      appendFbEmpty("排行榜暂时无法连接");
       return;
     }
-    var list = publicLeaderboardCache10 || [];
-    if (list.length === 0) {
-      var empty = document.createElement("li");
-      empty.className = "fb-empty";
-      empty.textContent = "暂无记录，快来挑战吧！";
-      fullBoard.appendChild(empty);
+    if (!cache) {
+      appendFbEmpty("排行榜加载中…");
       return;
     }
-    for (var i = 0; i < list.length; i++) {
-      var e = list[i];
+    if (cache.length === 0) {
+      appendFbEmpty("暂无记录，快来挑战吧！");
+      return;
+    }
+    for (var i = 0; i < cache.length; i++) {
+      var e = cache[i];
       var li = document.createElement("li");
       var isMe = !!(playerId && e.player_id === playerId);
       if (isMe) li.classList.add("highlight");
       var nameEl = document.createElement("span");
       nameEl.className = "fb-name";
       nameEl.textContent = e.player_name || "玩家";
+      li.appendChild(nameEl);
+      var dl = deviceLabel(e.client_type);
+      if (dl) {
+        var dEl = document.createElement("span");
+        dEl.className = "device-tag";
+        dEl.textContent = dl;
+        li.appendChild(dEl);
+      }
       if (isMe) {
         var tag = document.createElement("span");
         tag.className = "fb-me";
         tag.textContent = "我的成绩";
-        li.appendChild(nameEl);
         li.appendChild(tag);
-      } else {
-        li.appendChild(nameEl);
       }
       var scoreEl = document.createElement("span");
       scoreEl.className = "fb-score";
@@ -1056,7 +1166,7 @@
       renderMiniBoard();
       return Promise.resolve();
     }
-    return global.Supabase.getPublicLeaderboard(3).then(function (list) {
+    return global.Supabase.getPublicLeaderboardV2(3, null).then(function (list) {
       publicLeaderboardCache = list || [];
       publicLeaderboardFailed = false;
       renderMiniBoard();
@@ -1069,20 +1179,60 @@
 
   function loadFullBoard() {
     if (!global.Supabase.isConfigured()) {
-      publicLeaderboardFailed = true;
+      publicLeaderboardFailed10 = true;
       renderFullBoard();
       return Promise.resolve(null);
     }
-    return global.Supabase.getPublicLeaderboard(10).then(function (list) {
+    // 重试前先恢复为 loading（cache10 仍为 null，failed10 置 false），
+    // 避免上一次失败状态挡住本次 loading 展示。
+    publicLeaderboardFailed10 = false;
+    renderFullBoard();
+    return global.Supabase.getPublicLeaderboardV2(10, null).then(function (list) {
       publicLeaderboardCache10 = list || [];
-      publicLeaderboardFailed = false;
+      publicLeaderboardFailed10 = false;
       renderFullBoard();
       applyGlobalRecord(publicLeaderboardCache10);
       return publicLeaderboardCache10;
     }).catch(function () {
-      publicLeaderboardFailed = true;
+      publicLeaderboardFailed10 = true;
       renderFullBoard();
       return null;
+    });
+  }
+
+  /* 手机榜/网页榜筛选结果（仅 modal 显示用，绝不写回 authoritative 状态） */
+  function loadFilteredLeaderboard() {
+    var requestSeq = ++filteredLeaderboardRequestSeq;
+    var requestedTab = boardTab;
+    var clientTypeParam = (requestedTab === "mobile") ? "mobile" : "web";
+    // 切换 tab 立即进入 loading，避免先显示上一个 tab 的旧数据 / 旧 empty
+    filteredLeaderboardCache = null;
+    filteredLeaderboardFailed = false;
+    if (!global.Supabase.isConfigured()) {
+      filteredLeaderboardFailed = true;
+      renderFullBoard();
+      return Promise.resolve(null);
+    }
+    renderFullBoard();
+    return global.Supabase.getPublicLeaderboardV2(10, clientTypeParam).then(function (list) {
+      // 过期响应：不写缓存 / 失败态，也不渲染
+      if (requestSeq !== filteredLeaderboardRequestSeq || boardTab !== requestedTab) return null;
+      filteredLeaderboardCache = list || [];
+      filteredLeaderboardFailed = false;
+      renderFullBoard();
+      return filteredLeaderboardCache;
+    }).catch(function () {
+      if (requestSeq !== filteredLeaderboardRequestSeq || boardTab !== requestedTab) return null;
+      filteredLeaderboardFailed = true;
+      filteredLeaderboardCache = null;
+      renderFullBoard();
+      return null;
+    });
+  }
+
+  function updateBoardTabs() {
+    boardTabButtons.forEach(function (btn) {
+      btn.classList.toggle("active", btn.dataset.tab === boardTab);
     });
   }
 
@@ -1103,7 +1253,17 @@
 
   function showBoardModal() {
     boardModal.hidden = false;
-    loadFullBoard();
+    updateBoardTabs();
+    if (boardTab === "total") {
+      // 总榜 authoritative；尚未加载成功（含失败）就允许重试
+      if (!publicLeaderboardCache10) {
+        loadFullBoard();
+      } else {
+        renderFullBoard();
+      }
+    } else {
+      loadFilteredLeaderboard();
+    }
   }
 
   function hideBoardModal() { boardModal.hidden = true; }
@@ -1184,19 +1344,43 @@
       });
     });
 
-    // 姓名输入：失焦时空名回填「玩家」
+    // 手机唯一主按钮：复用单一 state 路由
+    if (btnMain) {
+      btnMain.addEventListener("click", function () {
+        if (state === STATE.IDLE || state === STATE.GAMEOVER) startGame();
+        else if (state === STATE.PLAYING) pauseGame();
+        else if (state === STATE.PAUSED) resumeGame();
+      });
+    }
+
+    // 排行榜 tab：总榜 / 手机榜 / 网页榜
+    boardTabButtons.forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        boardTab = btn.dataset.tab;
+        updateBoardTabs();
+        if (boardTab === "total") {
+          if (!publicLeaderboardCache10) loadFullBoard();
+          else renderFullBoard();
+        } else {
+          loadFilteredLeaderboard();
+        }
+      });
+    });
+
+    // iOS 防 pinch 手势（仅 game-active 时生效）
+    function preventGesture(e) {
+      if (document.body.classList.contains("game-active")) e.preventDefault();
+    }
+    document.addEventListener("gesturestart", preventGesture, { passive: false });
+    document.addEventListener("gesturechange", preventGesture, { passive: false });
+
+    // 姓名输入：失焦时规范化（空名保持空，placeholder 显示；业务 fallback 仍为「玩家」）
     playerNameInput.addEventListener("blur", function () {
       if (playerNameInput.disabled) return;
       applyNormalizedName();
     });
 
-    // 排行榜弹窗：点击蒙层仍可关闭
-    boardModal.addEventListener("click", function (e) {
-      if (e.target === boardModal) hideBoardModal();
-    });
-    hitModal.addEventListener("click", function (e) {
-      if (e.target === hitModal) hideHitModal();
-    });
+    // 排行榜 / 被打榜弹窗：点击遮罩层不再关闭，只能通过右上角 × 或底部「关闭」按钮关闭。
 
     board.addEventListener("pointermove", moveHammer);
     board.addEventListener("pointerenter", function () {
@@ -1221,11 +1405,16 @@
     buildBoard();
     clearLayout();
 
+    // 设备识别（会话内缓存）：mobile / web
+    clientType = detectClientType();
+    boardTab = "total";
+
     // 读取 / 创建匿名 player_id（刷新后不变）
     playerId = getOrCreatePlayerId();
 
-    // 读取玩家姓名（空则显示空，placeholder 提示；开始游戏时会回填「玩家」）
-    playerNameInput.value = loadPlayerName();
+    // 读取玩家姓名：空或仅历史 fallback「玩家」时显示空（placeholder 提示）；真实昵称则直接显示。
+    var savedName = (loadPlayerName() || "").trim();
+    playerNameInput.value = (savedName && savedName !== "玩家") ? savedName : "";
 
     highscore = loadHighscore();
     roundCharacterHits = emptyRoundHits();

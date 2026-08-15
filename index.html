@@ -86,21 +86,25 @@
             </div>
           </div>
         </aside>
-      </main>
 
-      <!-- 底部控制 -->
-      <footer class="bottom-controls">
-        <label class="name-field" for="player-name">
-          <span class="name-label">玩家姓名</span>
-          <input class="name-input" id="player-name" type="text" maxlength="12" placeholder="输入你的名字" autocomplete="off" />
-        </label>
-        <button class="btn btn-soft" id="btn-sound" title="声音开关">
-          <span class="btn-icon" id="sound-icon">🔊</span>
-          <span id="sound-label">声音</span>
-        </button>
-        <button class="btn btn-primary" id="btn-start">开始游戏</button>
-        <button class="btn btn-soft" id="btn-pause" disabled>暂停</button>
-      </footer>
+        <!-- 底部控制（mobile 顺序：棋盘 → 控制条 → 排行榜/被打榜） -->
+        <div class="bottom-controls">
+          <label class="name-field" for="player-name">
+            <svg class="name-icon" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="8" r="4"></circle>
+              <path d="M4 20.5c0-4.2 3.6-6.5 8-6.5s8 2.3 8 6.5"></path>
+            </svg>
+            <input class="name-input" id="player-name" type="text" maxlength="12" placeholder="输入你的昵称" autocomplete="off" />
+          </label>
+          <button class="btn btn-soft" id="btn-sound" title="声音开关">
+            <span class="btn-icon" id="sound-icon">🔊</span>
+            <span id="sound-label">声音</span>
+          </button>
+          <button class="btn btn-primary" id="btn-start">开始游戏</button>
+          <button class="btn btn-soft" id="btn-pause" disabled>暂停</button>
+          <button class="btn btn-primary mobile-only" id="btn-main">开始游戏</button>
+        </div>
+      </main>
 
     </div>
   </div>
@@ -141,6 +145,11 @@
       <div class="modal-head">
         <h2 class="modal-title">🏆 排行榜 TOP 10</h2>
         <button class="modal-close" id="btn-close-board" aria-label="关闭">✕</button>
+      </div>
+      <div class="segmented segmented-centered" id="board-tabs" role="tablist">
+        <button class="segment active" type="button" data-tab="total">总榜</button>
+        <button class="segment" type="button" data-tab="mobile">手机榜</button>
+        <button class="segment" type="button" data-tab="web">网页榜</button>
       </div>
       <ol class="full-board" id="full-board"></ol>
       <div class="modal-actions board-actions">

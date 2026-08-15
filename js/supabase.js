@@ -97,10 +97,33 @@
       .then(asObject);
   }
 
+  /* ============ V2：获取公共排行榜（总榜/手机榜/网页榜） ============ */
+  function getPublicLeaderboardV2(limit, clientType) {
+    return postJson(SUPABASE_URL + "/rest/v1/rpc/get_public_leaderboard_v2", {
+      p_limit: limit,
+      p_client_type: clientType == null ? null : clientType
+    }).then(asArray);
+  }
+
+  /* ============ V2：提交一局完整成绩（带设备来源 client_type） ============ */
+  function submitGameScoreV2(payload) {
+    return postJson(SUPABASE_URL + "/rest/v1/rpc/submit_game_score_v2", {
+      p_player_id: payload.p_player_id,
+      p_player_name: payload.p_player_name,
+      p_score: payload.p_score,
+      p_hits: payload.p_hits,
+      p_round_id: payload.p_round_id,
+      p_character_hits: payload.p_character_hits,
+      p_client_type: payload.p_client_type
+    }).then(asObject);
+  }
+
   global.Supabase = {
     isConfigured: isConfigured,
     getPublicLeaderboard: getPublicLeaderboard,
     getCharacterHitLeaderboard: getCharacterHitLeaderboard,
-    submitGameScore: submitGameScore
+    submitGameScore: submitGameScore,
+    getPublicLeaderboardV2: getPublicLeaderboardV2,
+    submitGameScoreV2: submitGameScoreV2
   };
 })(window);
