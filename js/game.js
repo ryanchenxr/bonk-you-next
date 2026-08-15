@@ -71,7 +71,7 @@
 
   var boardModal = document.getElementById("board-modal");
   var fullBoard = document.getElementById("full-board");
-  var boardModalScroll = boardModal.querySelector(".modal-scroll");
+  var boardModalScroll = boardModal.querySelector(".board-list-scroll");
   var miniBoard = document.getElementById("mini-board");
   var btnCloseBoard = document.getElementById("btn-close-board");
   var btnCloseBoard2 = document.getElementById("btn-close-board2");
@@ -1119,14 +1119,17 @@
       failed = filteredLeaderboardFailed;
     }
     if (failed) {
+      focusMyRowAfterRender = false; // 最终失败：结束本次 focus intent
       appendFbEmpty("排行榜暂时无法连接");
       return;
     }
     if (!cache) {
+      // 中间 loading 状态：不消费 focus intent，等最终数据 render 再定位
       appendFbEmpty("排行榜加载中…");
       return;
     }
     if (cache.length === 0) {
+      focusMyRowAfterRender = false; // 最终空榜：结束本次 focus intent，保持顶部
       appendFbEmpty("暂无记录，快来挑战吧！");
       return;
     }
@@ -1314,17 +1317,15 @@
 
   function showBoardModal() {
     boardModal.hidden = false;
+    boardTab = "total"; // 每次重新打开都回到总榜，不记忆上次关闭前的 tab
     updateBoardTabs();
     focusMyRowAfterRender = true; // 打开时渲染完成后定位到我的成绩一次
-    if (boardTab === "total") {
-      // 总榜 authoritative；尚未加载成功（含失败）就允许重试
-      if (!publicLeaderboardCache10) {
-        loadFullBoard();
-      } else {
-        renderFullBoard();
-      }
+    if (boardModalScroll) boardModalScroll.scrollTop = 0; // 名单区显式归零，不依赖 DOM 清空副作用
+    // 总榜 authoritative；尚未加载成功（含失败）就允许重试
+    if (!publicLeaderboardCache10) {
+      loadFullBoard();
     } else {
-      loadFilteredLeaderboard();
+      renderFullBoard();
     }
   }
 
@@ -1421,6 +1422,7 @@
         boardTab = btn.dataset.tab;
         updateBoardTabs();
         focusMyRowAfterRender = true; // 切 tab 渲染完成后定位到我的成绩一次
+        if (boardModalScroll) boardModalScroll.scrollTop = 0; // 名单区显式归零，不保存旧 tab scrollTop
         if (boardTab === "total") {
           if (!publicLeaderboardCache10) loadFullBoard();
           else renderFullBoard();
