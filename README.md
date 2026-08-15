@@ -48,3 +48,14 @@ python3 -m http.server 8000
 
 > 只填写 Publishable Key（通常以 `sb_publishable_` 开头）。
 > 不要填写 `service_role`、`sb_secret_...`、Database Password 或其他管理员凭据。
+
+## License
+
+Except for the audio assets described below, this project is licensed under the MIT License. See [LICENSE](LICENSE).
+
+### Audio assets
+
+Files under `assets/audio/` are excluded from the MIT License.
+
+No license for reuse or redistribution of these audio files is granted by this project. Audio assets may be subject to separate third-party licenses or usage terms.
+
