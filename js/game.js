@@ -86,14 +86,19 @@
   var score = 0;
   var hits = 0;
   var combo = 0;
-  var highscore = 0;
+  var highscore = 0;         // 本机个人最高分（localStorage）
+  var globalRecord = 0;      // 全站纪录显示值（0 表示未知或空榜）
+  var globalRecordKnown = false; // 是否已成功读取过排行榜（区分“未知”和“真实 0”）
   var timeLeftMs = GAME_DURATION_MS;
   var tickTimer = null;
   var roundTimer = null;
   var countdownTimer = null;
   var lastTick = 0;
   var lastUsed = [];   // 上一轮使用的洞口（用于降低连续重复概率）
-  var newRecord = false;
+  var newRecord = false;         // 本局是否刷新个人最高分
+  var recordBeforeRound = null;  // 本局开始前冻结的全站纪录（null = 未知）
+  var myRankBeforeRound = null;  // 本局开始前我在 TOP10 的排名（null=未知, -1=不在, >=0=排名）
+  var myLeaderboardScoreBeforeRound = null; // 本局开始前我的排行榜最好成绩（null=未知/不在榜）
 
   // Supabase / 身份
   var playerId = "";
@@ -431,7 +436,7 @@
   function updateScoreUI() {
     scoreEl.textContent = score;
     hitsEl.textContent = hits;
-    highEl.textContent = highscore;
+    highEl.textContent = globalRecord;
   }
 
   function updateTimeUI() {
@@ -661,6 +666,9 @@
     hits = 0;
     combo = 0;
     newRecord = false;
+    // 冻结本局开始前的排行榜基线（未知时不拿 0 当证明）
+    recordBeforeRound = globalRecordKnown ? globalRecord : null;
+    computeMyLeaderboardBaseline();
     timeLeftMs = GAME_DURATION_MS;
     lastUsed = [];
 
@@ -824,13 +832,34 @@
         if (!hitModal.hidden) renderHitModalBoard();
       });
       loadFullBoard().then(function (list) {
-        if (list && playerId) {
-          for (var i = 0; i < list.length; i++) {
-            if (list[i].player_id === playerId) {
-              resultTop10.hidden = false;
-              break;
-            }
-          }
+        if (!list || !playerId) return; // 提交/刷新失败或无身份，不显示排行榜成就
+
+        // 提交后“我”的真实状态
+        var myRankAfter = -1;
+        for (var i = 0; i < list.length; i++) {
+          if (list[i].player_id === playerId) { myRankAfter = i; break; }
+        }
+
+        // 本局是否真正改善了排行榜成绩（基线未知时不猜测）
+        var roundImproved = false;
+        if (myRankBeforeRound === null) {
+          roundImproved = false; // 未知，不发猜测成就
+        } else if (myRankBeforeRound === -1) {
+          roundImproved = (myRankAfter >= 0); // 开局前不在榜：本局进榜才算改善
+        } else {
+          roundImproved = (myLeaderboardScoreBeforeRound !== null && score > myLeaderboardScoreBeforeRound);
+        }
+
+        // 三级成就，只显示最高优先级的一个
+        if (recordBeforeRound !== null && score > recordBeforeRound) {
+          resultTop10.textContent = "👑 刷新全站纪录！";
+          resultTop10.hidden = false;
+        } else if (roundImproved && myRankAfter === 0) {
+          resultTop10.textContent = "🥇 登顶排行榜！";
+          resultTop10.hidden = false;
+        } else if (roundImproved && myRankAfter >= 0) {
+          resultTop10.textContent = "🏆 进入排行榜 TOP 10！";
+          resultTop10.hidden = false;
         }
       });
     }).catch(function () {
@@ -898,6 +927,7 @@
     resultHigh.textContent = highscore;
     resultRecord.hidden = !newRecord;
     resultTop10.hidden = true;
+    resultTop10.textContent = "🏆 进入排行榜 TOP 10！";
     resultUpload.hidden = true;
     resultModal.hidden = false;
   }
@@ -988,6 +1018,38 @@
     }
   }
 
+  /* 从公共排行榜结果刷新全站纪录（第 1 名 score）。
+     空榜显示 0；读取失败时不调用本函数，从而保留最近一次成功值。 */
+  function applyGlobalRecord(list) {
+    var arr = list || [];
+    globalRecord = (arr.length > 0) ? (Number(arr[0].score) || 0) : 0;
+    globalRecordKnown = true; // 成功读取过，之后才允许用 globalRecord 做纪录判断
+    updateScoreUI();
+  }
+
+  /* 基于最近一次成功取得的 TOP10 冻结“我”的排行榜基线。 */
+  function computeMyLeaderboardBaseline() {
+    var list = publicLeaderboardCache10;
+    if (!list) {
+      myRankBeforeRound = null;
+      myLeaderboardScoreBeforeRound = null;
+      return;
+    }
+    var found = false;
+    for (var i = 0; i < list.length; i++) {
+      if (list[i].player_id === playerId) {
+        myRankBeforeRound = i;
+        myLeaderboardScoreBeforeRound = Number(list[i].score) || 0;
+        found = true;
+        break;
+      }
+    }
+    if (!found) {
+      myRankBeforeRound = -1;
+      myLeaderboardScoreBeforeRound = null;
+    }
+  }
+
   function loadMiniBoard() {
     if (!global.Supabase.isConfigured()) {
       publicLeaderboardFailed = true;
@@ -998,6 +1060,7 @@
       publicLeaderboardCache = list || [];
       publicLeaderboardFailed = false;
       renderMiniBoard();
+      applyGlobalRecord(publicLeaderboardCache);
     }).catch(function () {
       publicLeaderboardFailed = true;
       renderMiniBoard();
@@ -1014,6 +1077,7 @@
       publicLeaderboardCache10 = list || [];
       publicLeaderboardFailed = false;
       renderFullBoard();
+      applyGlobalRecord(publicLeaderboardCache10);
       return publicLeaderboardCache10;
     }).catch(function () {
       publicLeaderboardFailed = true;
@@ -1175,6 +1239,7 @@
 
     // 并行加载远端数据，不阻塞游戏初始化
     loadMiniBoard();
+    loadFullBoard(); // 预取 TOP10，供开局时冻结“我的排行榜基线”
     loadCharacterHits().then(function () {
       renderHitBoard();
     });
