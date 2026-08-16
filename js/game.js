@@ -716,6 +716,8 @@
     hideHammer();
     board.classList.remove("cursor-hammer");
     global.AudioManager.stopBgm();
+    global.AudioManager.prepareForGame(); // 预加载 BGM + 解码 hit + 解锁 AudioContext
+    global.AudioManager.playBgm(); // 真实 user gesture 内直接启动 BGM（文件前 2s 为静音前奏）
 
     applyNormalizedName(); // trim + 空名 -> 玩家
 
@@ -774,7 +776,7 @@
 
   function beginPlay() {
     state = STATE.PLAYING;
-    global.AudioManager.playBgm();
+    // BGM 已在 startGame 的 user gesture 内启动，这里不碰 BGM、不重置 currentTime。
     lastTick = Date.now();
     tickTimer = setInterval(tick, 100);
     updateButtons();
@@ -1033,7 +1035,6 @@
     if (global.AudioManager.isEnabled()) {
       soundIcon.textContent = "🔊";
       soundLabel.textContent = "声音";
-      if (state === STATE.PLAYING) global.AudioManager.resumeBgm();
     } else {
       soundIcon.textContent = "🔇";
       soundLabel.textContent = "静音";
@@ -1517,6 +1518,7 @@
     board.addEventListener("pointerdown", function (e) {
       if (state !== STATE.PLAYING) return;
       smashHammer();
+      global.AudioManager.recoverBgmIfNeeded(); // 若 BGM 曾被拒绝，在真实手势内恢复
       onBoardPointerDown(e);
     });
   }
