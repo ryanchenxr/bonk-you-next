@@ -1184,7 +1184,7 @@ body {
   .howto-card .howto-list { gap: 4px; margin-top: 6px; }
   .howto-card.collapsed .howto-list { display: none; }
   .board-wrap { order: 2; padding-top: 0; flex: 0 0 auto; width: 100%; align-self: stretch; }
-  /* COMBO 胶囊只在倒计时/游戏中才需要独立空间；IDLE/PAUSED/GAMEOVER 回收这 44px。 */
+  /* COMBO 胶囊在倒计时/游戏/暂停时都保留独立空间；暂停不改变游戏区几何位置。 */
   body.game-active .board-wrap { padding-top: 44px; }
   .bottom-controls { order: 3; margin: 0 -14px -14px; flex-wrap: wrap; }
   .name-field { flex: 1 1 100%; justify-content: center; }
@@ -1243,7 +1243,8 @@ body {
   .combo-sub { display: none; }
   .combo-text { font-size: 15px; }
 
-  /* 手机端 active 时锁定页面滚动/缩放 */
+  /* 手机端 active 时锁定页面滚动/缩放（html/body 一起锁，覆盖根滚动与元素间隙） */
+  html.game-active,
   body.game-active {
     overflow: hidden;
     overscroll-behavior: none;

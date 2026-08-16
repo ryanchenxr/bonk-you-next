@@ -815,25 +815,23 @@
 
   function resumeGame() {
     if (state !== STATE.PAUSED) return;
-    // 手机端：先收起玩法说明 + 定位回游戏主视图，再恢复 PLAYING 并锁定滚动（scroll before lock）。
-    focusMobileGameView(function () {
-      state = STATE.PLAYING;
-      global.AudioManager.resumeBgm();
-      lastTick = Date.now();
-      tickTimer = setInterval(tick, 100);
-      for (var i = 0; i < 9; i++) {
-        var s = slots[i];
-        if (s.active) {
-          s.stayEnd = Date.now() + s.remaining;
-          s.hideTimer = setTimeout(function (idx) {
-            return function () { hideMole(idx, false); };
-          }(i), s.remaining);
-        }
+    // 暂停期间 viewport lock 一直保持，resume 不再 scrollIntoView，直接恢复 PLAYING，保持原视口位置。
+    state = STATE.PLAYING;
+    global.AudioManager.resumeBgm();
+    lastTick = Date.now();
+    tickTimer = setInterval(tick, 100);
+    for (var i = 0; i < 9; i++) {
+      var s = slots[i];
+      if (s.active) {
+        s.stayEnd = Date.now() + s.remaining;
+        s.hideTimer = setTimeout(function (idx) {
+          return function () { hideMole(idx, false); };
+        }(i), s.remaining);
       }
-      hidePauseOverlay();
-      updateButtons();
-      scheduleNextRound();
-    });
+    }
+    hidePauseOverlay();
+    updateButtons();
+    scheduleNextRound();
   }
 
   /* ============ 结束 ============ */
@@ -1014,15 +1012,17 @@
     });
   }
 
-  /* 手机端：active 时锁定页面滚动/缩放，并强制收起玩法说明；非 active 不自动展开。 */
+  /* 手机端：COUNTDOWN/PLAYING/PAUSED 都保持游戏会话视口锁；IDLE/GAMEOVER 才解锁。
+     暂停只暂停计时/土拨鼠/BGM，不释放 viewport lock。 */
   function updateMobileChrome() {
     var mobile = (clientType === "mobile");
-    var active = mobile && (state === STATE.COUNTDOWN || state === STATE.PLAYING);
+    var active = mobile && (state === STATE.COUNTDOWN || state === STATE.PLAYING || state === STATE.PAUSED);
     document.body.classList.toggle("game-active", active);
+    document.documentElement.classList.toggle("game-active", active);
     if (active) {
       setHowtoCollapsed(true);
     } else {
-      // 离开游戏态（PAUSED/IDLE/GAMEOVER）清空 double-tap 追踪，避免残留误判
+      // 离开游戏会话（IDLE/GAMEOVER）清空 double-tap 追踪，避免残留误判
       lastSingleTap = null;
       multiTouchActive = false;
     }
@@ -1445,20 +1445,8 @@
     document.addEventListener("gesturestart", preventGesture, { passive: false });
     document.addEventListener("gesturechange", preventGesture, { passive: false });
 
-    // iOS double-tap zoom 兜底：仅 game-active，且“单指 + 时间近 + 空间近”才 preventDefault。
+    // iOS double-tap zoom 兜底：游戏会话内所有单指 tap 都参与追踪（含按钮/gap），
     // 命中由 pointerdown 完成，touchend 的 preventDefault 不影响计分。
-    function isInteractiveTarget(el) {
-      while (el && el.nodeType === 1) {
-        var tag = el.tagName.toLowerCase();
-        if (tag === "button" || tag === "input" || tag === "textarea" || tag === "select" || tag === "a" || tag === "label") {
-          return true;
-        }
-        if (el.getAttribute("role") === "button") return true;
-        el = el.parentElement;
-      }
-      return false;
-    }
-
     document.addEventListener("touchstart", function (e) {
       if (e.touches.length > 1) multiTouchActive = true;
     }, { passive: true });
@@ -1478,18 +1466,13 @@
         return;
       }
       if (e.changedTouches.length !== 1) return;
-      // 交互控件不拦截，避免破坏按钮 click
-      if (isInteractiveTarget(e.target)) {
-        lastSingleTap = null;
-        return;
-      }
       var t = e.changedTouches[0];
       var now = Date.now();
       if (lastSingleTap) {
         var dt = now - lastSingleTap.t;
         var dx = t.clientX - lastSingleTap.x;
         var dy = t.clientY - lastSingleTap.y;
-        if (dt <= 300 && (dx * dx + dy * dy) <= 1600) {
+        if (dt <= 300 && (dx * dx + dy * dy) <= 3600) {
           e.preventDefault(); // 阻止 Safari/WKWebView double-tap zoom
           lastSingleTap = null;
           return;
