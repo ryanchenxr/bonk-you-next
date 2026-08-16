@@ -135,6 +135,8 @@
   var filteredLeaderboardFailed = false;
   var filteredLeaderboardRequestSeq = 0; // 防串榜：单调递增请求序号
   var focusMyRowAfterRender = false; // 打开/切换排行榜后，渲染完成时定位到我的成绩一次
+  var lastSingleTap = null;   // iOS double-tap 追踪：{ t, x, y }
+  var multiTouchActive = false; // 本次触摸交互是否出现过多指（用于区分 pinch）
 
   /* ============ 工具函数 ============ */
   function rand(min, max) { return min + Math.random() * (max - min); }
@@ -1019,6 +1021,10 @@
     document.body.classList.toggle("game-active", active);
     if (active) {
       setHowtoCollapsed(true);
+    } else {
+      // 离开游戏态（PAUSED/IDLE/GAMEOVER）清空 double-tap 追踪，避免残留误判
+      lastSingleTap = null;
+      multiTouchActive = false;
     }
   }
 
@@ -1438,6 +1444,64 @@
     }
     document.addEventListener("gesturestart", preventGesture, { passive: false });
     document.addEventListener("gesturechange", preventGesture, { passive: false });
+
+    // iOS double-tap zoom 兜底：仅 game-active，且“单指 + 时间近 + 空间近”才 preventDefault。
+    // 命中由 pointerdown 完成，touchend 的 preventDefault 不影响计分。
+    function isInteractiveTarget(el) {
+      while (el && el.nodeType === 1) {
+        var tag = el.tagName.toLowerCase();
+        if (tag === "button" || tag === "input" || tag === "textarea" || tag === "select" || tag === "a" || tag === "label") {
+          return true;
+        }
+        if (el.getAttribute("role") === "button") return true;
+        el = el.parentElement;
+      }
+      return false;
+    }
+
+    document.addEventListener("touchstart", function (e) {
+      if (e.touches.length > 1) multiTouchActive = true;
+    }, { passive: true });
+
+    document.addEventListener("touchend", function (e) {
+      if (!document.body.classList.contains("game-active")) {
+        lastSingleTap = null;
+        multiTouchActive = false;
+        return;
+      }
+      // 还有手指在屏幕上：多指进行中，交给 gesture，不参与 single-tap 判定
+      if (e.touches.length > 0) return;
+      // 多指交互的收尾：清状态，不计入 double-tap
+      if (multiTouchActive) {
+        multiTouchActive = false;
+        lastSingleTap = null;
+        return;
+      }
+      if (e.changedTouches.length !== 1) return;
+      // 交互控件不拦截，避免破坏按钮 click
+      if (isInteractiveTarget(e.target)) {
+        lastSingleTap = null;
+        return;
+      }
+      var t = e.changedTouches[0];
+      var now = Date.now();
+      if (lastSingleTap) {
+        var dt = now - lastSingleTap.t;
+        var dx = t.clientX - lastSingleTap.x;
+        var dy = t.clientY - lastSingleTap.y;
+        if (dt <= 300 && (dx * dx + dy * dy) <= 1600) {
+          e.preventDefault(); // 阻止 Safari/WKWebView double-tap zoom
+          lastSingleTap = null;
+          return;
+        }
+      }
+      lastSingleTap = { t: now, x: t.clientX, y: t.clientY };
+    }, { passive: false });
+
+    document.addEventListener("touchcancel", function () {
+      lastSingleTap = null;
+      multiTouchActive = false;
+    }, { passive: true });
 
     // 姓名输入：失焦时规范化（空名保持空，placeholder 显示；业务 fallback 仍为「玩家」）
     playerNameInput.addEventListener("blur", function () {
